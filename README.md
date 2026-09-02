@@ -20,11 +20,15 @@ export BKN_ENCRYPTION_KEY=$(openssl rand -hex 32)
 bkn kv set myapp.stripe sk_live_xxx --type encrypted
 bkn kv get myapp.stripe
 
+bkn script test --file digest.js --input '{"limit":10}'
+bkn script create waitlist-digest --file digest.js
+bkn script run waitlist-digest
+
 bkn daemon start          # the same primitives over HTTP
 curl -s localhost:7799/_health
 ```
 
-## Why only two primitives
+## Why so few primitives
 
 `bkn` replaces a 85k-line Node backend that had grown ~40 admin domains. An
 audit of every real consumer of that backend found that:
@@ -37,8 +41,37 @@ audit of every real consumer of that backend found that:
   instance, by absolute filesystem path.
 
 The lesson was not "port the 40 domains". It was that features multiply when
-the core lacks an escape hatch. So the core is small on purpose: **store** and
-**kv**, with everything else built on top rather than beside them.
+the core lacks an escape hatch. So the core is small on purpose — **store**,
+**kv**, and **script** — with everything else built on top rather than beside
+them.
+
+## Scripts are the escape hatch
+
+Most of those 40 domains were a scheduled HTTP call, a transform over stored
+records, or a webhook handler. Given a sandboxed runtime with access to the
+other primitives, they are scripts:
+
+```js
+function main(input) {
+  const subs = bkn.store.list("marketing/waitlist", { limit: input.limit || 100 });
+  bkn.kv.set("marketing.last_digest", bkn.now());
+  return { total: subs.length };
+}
+```
+
+A script must define `main(input)`; its return value is the run's result. It
+gets `bkn.store`, `bkn.kv`, `bkn.http.fetch`, `console.log`, `bkn.id()` and
+`bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
+`require`, and no network beyond its own `allow_net` list. Every run is bounded
+by `timeout_ms` and recorded with its status, logs, result and duration.
+
+Outbound requests that resolve to a loopback, link-local or private address are
+refused even when the hostname is allow-listed, which is what stops an
+allow-listed name from reaching the cloud metadata endpoint.
+`BKN_SCRIPT_ALLOW_PRIVATE_NET=1` lifts that deliberately.
+
+There is no event loop: `bkn.http.fetch` blocks and returns its response, and
+there are no promises or `async`/`await`.
 
 ## Conformance
 
@@ -60,6 +93,7 @@ Built to the agent-first CLI spec family — <https://cli-specs.intrane.fr>.
 | `BKN_DATA` | datastore path (default `~/.bkn/bkn.db`) |
 | `BKN_HOST` / `BKN_PORT` | serve bind defaults (`127.0.0.1` / `7799`); flags win |
 | `BKN_ADMIN_TOKEN` | bearer token gating every non-public HTTP route; **required** to bind off-loopback |
+| `BKN_SCRIPT_ALLOW_PRIVATE_NET` | `1` lets scripts reach loopback and private addresses |
 | `BKN_ENCRYPTION_KEY` | single key, hex-64 / base64-32 / 32 literal chars; stamped as keyId `v1` |
 | `BKN_ENCRYPTION_KEYS` | `v1:<material>,v2:<material>` — every key that can decrypt |
 | `BKN_ENCRYPTION_KEY_ID` | which key encrypts new values |
@@ -82,5 +116,7 @@ the rest.
 
 ## Status
 
-Scaffold. `store` and `kv` are complete and tested; `auth`, `files`, `events`,
-`cron` and `scripts` are the remaining core primitives.
+Scaffold. `store`, `kv` and `script` are complete and tested; `auth`, `files`,
+`events` and `cron` are the remaining core primitives.
+
+~3,700 lines of implementation, ~800 of tests, one 19 MB static binary.

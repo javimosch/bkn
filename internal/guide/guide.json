@@ -4,9 +4,10 @@
   "model": {
     "single binary": "The tool is the server, the client and the migration runner. There is nothing else to install and no container to build.",
     "single writer": "bkn owns its SQLite file. Consumers reach it through the CLI or the HTTP API, never by opening the database themselves. This is the rule that keeps the data model changeable.",
-    "two primitives": "store holds documents in namespaced collections; kv holds typed settings. Features are built on top of these, not added beside them.",
+    "two primitives": "store holds documents in namespaced collections; kv holds typed settings; script runs sandboxed JavaScript over both. Features are built on top of these, not added beside them.",
     "namespaces": "Every collection is addressed as <namespace>/<collection>. The namespace is the owning app, so two apps never collide and no caller has to guess a table name.",
-    "cli is the api": "Any verb available over HTTP is available as a subcommand with the same shape. Agents drive the CLI; browsers and services drive the HTTP routes."
+    "cli is the api": "Any verb available over HTTP is available as a subcommand with the same shape. Agents drive the CLI; browsers and services drive the HTTP routes.",
+    "scripts are userland": "Anything that is a scheduled HTTP call, a transform over stored records, or a webhook handler is a script, not a core feature. This is what keeps the core small enough to change."
   },
   "loop": [
     "bkn guide - read this, once, to learn the model",
@@ -14,6 +15,8 @@
     "bkn store put myapp/users --data '{\"email\":\"A@B.io\"}' - write a document; the collection is created on first write",
     "bkn store find myapp/users --where email=a@b.io - read it back by any field",
     "bkn kv set myapp.stripe_key sk_live_... --type encrypted - store a secret sealed with the active key",
+    "bkn script test --file draft.js --input '{}' - try a script before storing it",
+    "bkn script create digest --file draft.js - store it, then run it by name or over HTTP",
     "bkn serve - expose the same primitives over HTTP when a service needs them",
     "bkn daemon start - background that server and poll it healthy"
   ],
@@ -25,7 +28,10 @@
     "filter": "A single field equality predicate, 'field=value'. Values that parse as a number, true, false or null are compared as that type.",
     "kv type": "'string' (opaque), 'json' (validated on write), or 'encrypted' (sealed with AES-256-GCM before storage, opened on read).",
     "keyring": "The set of keys that can decrypt, plus the one id that encrypts. Rotation means adding a key, pointing BKN_ENCRYPTION_KEY_ID at it, and running 'bkn kv rekey'.",
-    "public entry": "A kv entry marked --public is readable through the unauthenticated HTTP settings route. An encrypted entry can never be public."
+    "public entry": "A kv entry marked --public is readable through the unauthenticated HTTP settings route. An encrypted entry can never be public.",
+    "script": "A stored JavaScript program that must define a top-level function main(input). Its return value is the run's result. It gets store, kv and allow-listed outbound HTTP, and nothing else - no filesystem, no processes, no timers, no require.",
+    "allow_net": "The per-script list of hostnames bkn.http.fetch may reach ('api.stripe.com', or '*.example.com'). Empty means no network. Connections that resolve to a private or loopback address are refused regardless, unless BKN_SCRIPT_ALLOW_PRIVATE_NET=1.",
+    "run": "One execution, recorded with its status (ok|error|timeout), input, result, logs and duration. Read them back with 'bkn script runs <name>'."
   },
   "commands": {
     "store": [
@@ -53,6 +59,16 @@
       "bkn guide [--human]",
       "bkn help-json",
       "bkn version"
+    ],
+    "script": [
+      "bkn script create <name> --file <path> [--description D] [--timeout MS] [--allow-net hosts]",
+      "bkn script test --file <path> [--input <json>] [--allow-net hosts]",
+      "bkn script run <name> [--input <json|@file|->]",
+      "bkn script list",
+      "bkn script show <name>",
+      "bkn script update <name> [--file <path>] [--allow-net hosts] [--timeout MS] [--enable|--disable]",
+      "bkn script delete <name>",
+      "bkn script runs <name> [--limit N]"
     ]
   },
   "examples": [
@@ -87,6 +103,29 @@
         "curl -s localhost:7799/_health",
         "curl -s localhost:7799/v1/store/myapp/users"
       ]
+    },
+    {
+      "goal": "Turn a would-be admin feature into a script",
+      "do": [
+        "cat > digest.js <<'JS'",
+        "function main(input) {",
+        "  const subs = bkn.store.list('marketing/waitlist', { limit: input.limit || 100 });",
+        "  bkn.kv.set('marketing.last_digest', bkn.now());",
+        "  return { total: subs.length };",
+        "}",
+        "JS",
+        "bkn script test --file digest.js --input '{\"limit\":10}'",
+        "bkn script create waitlist-digest --file digest.js",
+        "bkn script run waitlist-digest --input '{\"limit\":10}'"
+      ]
+    },
+    {
+      "goal": "Let a script call an external API",
+      "do": [
+        "bkn script update notify --allow-net api.telegram.org",
+        "# inside the script:  bkn.http.fetch('https://api.telegram.org/...', {method:'POST', body:{chat_id:1}})",
+        "bkn script run notify"
+      ]
     }
   ],
   "gotchas": [
@@ -99,7 +138,13 @@
     "bkn never retries a failed operation for you. Errors carry a 'recoverable' flag and you decide.",
     "Collections are created on first write. A typo in a namespace makes a new empty collection rather than an error - check 'bkn store collections' if a read comes back empty.",
     "BKN_ENCRYPTION_KEY always stamps keyId 'v1' - the format the Node backend wrote. Two different single keys therefore both claim v1, and 'kv rekey' cannot tell them apart. Use BKN_ENCRYPTION_KEYS with distinct ids as soon as you have more than one key.",
-    "Ids are ULIDs and sort by creation time, including within one millisecond. Ordering by id is stable; ordering by a document field is not - store list orders by updated_at, then id."
+    "Ids are ULIDs and sort by creation time, including within one millisecond. Ordering by id is stable; ordering by a document field is not - store list orders by updated_at, then id.",
+    "A script must define main(input). A bare top-level expression is not the result and is never called.",
+    "There is no event loop in the script runtime: no promises, no async/await, no setTimeout. bkn.http.fetch blocks and returns its response directly.",
+    "A script with an empty allow_net has no network at all. Grant hosts explicitly, one script at a time.",
+    "Outbound requests that resolve to a loopback, link-local or private address are refused even when the hostname is allow-listed - that is what stops an allow-listed name from reaching the cloud metadata endpoint. BKN_SCRIPT_ALLOW_PRIVATE_NET=1 lifts it deliberately.",
+    "Every run is bounded by timeout_ms (default 5000). The bound cannot be removed, only raised, because an unbounded script wedges the daemon.",
+    "script update only changes the flags you actually pass, so editing the code never silently resets a timeout or an allowlist."
   ],
   "see_also": [
     "bkn help-json",

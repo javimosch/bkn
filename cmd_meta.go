@@ -10,6 +10,7 @@ import (
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/out"
+	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/store"
 )
 
@@ -87,15 +88,17 @@ func helpJSON() map[string]any {
 		"env": []string{
 			"BKN_DATA", "BKN_HOST", "BKN_PORT", "BKN_ADMIN_TOKEN",
 			"BKN_ENCRYPTION_KEY", "BKN_ENCRYPTION_KEYS", "BKN_ENCRYPTION_KEY_ID",
+			"BKN_SCRIPT_ALLOW_PRIVATE_NET",
 			"SUPERBACKEND_ENCRYPTION_KEY", "SAASBACKEND_ENCRYPTION_KEY",
 		},
 		"defaults": map[string]any{
-			"data":        db.Path(),
-			"host":        defaultHost,
-			"port":        defaultPort,
-			"list_limit":  50,
-			"kv_types":    kv.ValidTypes(),
-			"normalizers": store.ValidNormalizers(),
+			"data":              db.Path(),
+			"host":              defaultHost,
+			"port":              defaultPort,
+			"list_limit":        50,
+			"kv_types":          kv.ValidTypes(),
+			"normalizers":       store.ValidNormalizers(),
+			"script_timeout_ms": script.DefaultTimeoutMS,
 		},
 		"see_also": []string{"bkn guide"},
 	}
@@ -120,6 +123,14 @@ func printHelp() {
     bkn kv list [--prefix <p>] [--public]
     bkn kv delete <key>
     bkn kv rekey
+
+  script  sandboxed JavaScript over store + kv
+    bkn script create <name> --file <path> [--allow-net hosts] [--timeout MS]
+    bkn script test --file <path> [--input <json>]
+    bkn script run <name> [--input <json>]
+    bkn script list | show <name> | delete <name>
+    bkn script update <name> [--file <path>] [--enable|--disable]
+    bkn script runs <name> [--limit N]
 
   server
     bkn serve [--host 127.0.0.1] [--port 7799]

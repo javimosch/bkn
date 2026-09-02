@@ -20,6 +20,7 @@ import (
 
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
+	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/store"
 )
 
@@ -32,12 +33,14 @@ type Config struct {
 
 // Server wires the primitives to HTTP routes.
 type Server struct {
-	cfg   Config
-	st    *store.Store
-	kv    *kv.KV
-	token string // shutdown token, non-empty only when bound off-loopback
-	admin string // BKN_ADMIN_TOKEN, gates every non-public route
-	srv   *http.Server
+	cfg    Config
+	st     *store.Store
+	kv     *kv.KV
+	reg    *script.Registry
+	runner *script.Runner
+	token  string // shutdown token, non-empty only when bound off-loopback
+	admin  string // BKN_ADMIN_TOKEN, gates every non-public route
+	srv    *http.Server
 }
 
 // IsLoopback reports whether host addresses only the local machine.
@@ -59,8 +62,8 @@ func TokenPath() string {
 }
 
 // New builds a Server, enforcing the bind-safety rules before anything listens.
-func New(cfg Config, st *store.Store, k *kv.KV) (*Server, error) {
-	s := &Server{cfg: cfg, st: st, kv: k, admin: os.Getenv("BKN_ADMIN_TOKEN")}
+func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner) (*Server, error) {
+	s := &Server{cfg: cfg, st: st, kv: k, reg: reg, runner: runner, admin: os.Getenv("BKN_ADMIN_TOKEN")}
 
 	if !IsLoopback(cfg.Host) {
 		// Off-loopback the box is reachable by others, so neither the data
@@ -167,6 +170,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/store/{ns}/{coll}/{id}", s.guard(s.storeGet))
 	mux.HandleFunc("PATCH /v1/store/{ns}/{coll}/{id}", s.guard(s.storePatch))
 	mux.HandleFunc("DELETE /v1/store/{ns}/{coll}/{id}", s.guard(s.storeDelete))
+
+	mux.HandleFunc("GET /v1/script", s.guard(s.scriptList))
+	mux.HandleFunc("POST /v1/script/{name}/run", s.guard(s.scriptRun))
+	mux.HandleFunc("GET /v1/script/{name}/runs", s.guard(s.scriptRuns))
 
 	mux.HandleFunc("GET /v1/kv", s.kvList)
 	mux.HandleFunc("GET /v1/kv/{key}", s.kvGet)
@@ -297,6 +304,55 @@ func (s *Server) storeDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": r.PathValue("id")})
+}
+
+func (s *Server) scriptList(w http.ResponseWriter, r *http.Request) {
+	scripts, err := s.reg.List()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(scripts), "scripts": scripts})
+}
+
+func (s *Server) scriptRun(w http.ResponseWriter, r *http.Request) {
+	var input any = map[string]any{}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 4<<20)).Decode(&input); err != nil {
+			writeErr(w, http.StatusBadRequest, "validation_error", "body must be JSON")
+			return
+		}
+	}
+	res, err := s.runner.Run(r.PathValue("name"), input)
+	if errors.Is(err, script.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	if errors.Is(err, script.ErrDisabled) {
+		writeErr(w, http.StatusForbidden, "script_disabled", err.Error())
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	// A script that failed is a completed request that reports a failure, not
+	// a transport-level error: the caller still wants the logs and the run id.
+	status := http.StatusOK
+	if !res.OK {
+		status = http.StatusUnprocessableEntity
+	}
+	writeJSON(w, status, map[string]any{"ok": res.OK, "value": res.Value, "run": res.Run})
+}
+
+func (s *Server) scriptRuns(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	runs, err := s.reg.Runs(r.PathValue("name"), limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(runs), "runs": runs})
 }
 
 // kvList is public when ?public=1; anything broader needs the admin token.

@@ -32,6 +32,30 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS records_ns_coll ON records(ns, coll, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS scripts (
+  name        TEXT PRIMARY KEY,
+  code        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  timeout_ms  INTEGER NOT NULL DEFAULT 5000,
+  allow_net   TEXT NOT NULL DEFAULT '[]',
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS script_runs (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  status      TEXT NOT NULL,
+  input       TEXT NOT NULL DEFAULT '',
+  result      TEXT NOT NULL DEFAULT '',
+  error       TEXT NOT NULL DEFAULT '',
+  logs        TEXT NOT NULL DEFAULT '',
+  duration_ms INTEGER NOT NULL,
+  started_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS script_runs_name ON script_runs(name, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS kv (
   key         TEXT PRIMARY KEY,
   value       TEXT NOT NULL,

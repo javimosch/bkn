@@ -51,6 +51,8 @@ func main() {
 		cmdStore(rest)
 	case "kv":
 		cmdKV(rest)
+	case "script":
+		cmdScript(rest)
 	case "serve":
 		cmdServe(rest)
 	case "daemon":

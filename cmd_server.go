@@ -7,6 +7,7 @@ import (
 
 	"github.com/javimosch/bkn/internal/daemon"
 	"github.com/javimosch/bkn/internal/out"
+	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/server"
 	"github.com/javimosch/bkn/internal/store"
 )
@@ -35,9 +36,12 @@ func cmdServe(args []string) {
 	conn := open()
 	defer conn.Close()
 
+	st := store.New(conn)
+	k := newKV(conn)
+	reg := script.NewRegistry(conn)
 	srv, err := server.New(
 		server.Config{Host: *host, Port: *port, Version: Version},
-		store.New(conn), newKV(conn),
+		st, k, reg, script.NewRunner(reg, st, k),
 	)
 	if err != nil {
 		out.Fail(out.InvalidValue, "unsafe_bind", err.Error(),

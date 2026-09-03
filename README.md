@@ -288,12 +288,15 @@ scripts, with no Go code added for either — see [`examples/`](examples/):
 | Stripe webhook | ~1,500 lines, 2 models | 159 lines of JavaScript |
 | Forms | forms service, controller, model | 154 lines of JavaScript |
 | Waiting-list exports | ~900 lines, two services | 120 lines of JavaScript |
+| i18n | 2 services, 2 controllers, 2 models | 240 lines of JavaScript |
+| Page redirects | service, admin routes, model | 110 lines of JavaScript |
 
 That is the test the core was built for. Porting them surfaced gaps — no
 crypto in the sandbox, no public inbound route, no atomic conditional write, a
 binary-unsafe `fetch`, then GET hooks, non-JSON responses, CORS and rate
 limiting — every one of which became a general primitive rather than a
-one-off patch. Nothing leaked back into Go.
+one-off patch. Nothing leaked back into Go — and the last two domains needed
+no core changes at all.
 
 ## Status
 

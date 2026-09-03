@@ -10,6 +10,8 @@ Go code added for either.
 | Stripe webhook | ~1,500 lines across services, controllers, routes and 2 models | [`stripe-webhook.js`](stripe-webhook/stripe-webhook.js), 159 lines |
 | Forms | forms.service + controller + FormSubmission model | [`forms.js`](forms/forms.js), 154 lines |
 | Waiting-list exports | ~900 lines across two services plus controllers and routes | [`waitlist-export.js`](forms/waitlist-export.js), 120 lines |
+| i18n | i18n.service + i18nInferredKeys.service + 2 controllers + 2 models | [`i18n.js`](i18n/i18n.js) 158 + [`i18n-import.js`](i18n/i18n-import.js) 82 lines |
+| Page redirects | pageRedirects.service + admin routes + model | [`redirects.js`](redirects/redirects.js), 110 lines |
 
 ## blog-automation
 
@@ -68,6 +70,57 @@ Worth noting in the port:
 - **Billing state lives in `billing/subjects`, not on the user record.** Putting
   it on the user is exactly what drove a consumer of the old system to bypass
   the API and write MongoDB directly.
+
+## i18n
+
+Translation bundles, with a missing-key queue.
+
+```sh
+bkn store put i18n/locales --id en --data '{"name":"English","default":true}'
+bkn script run i18n-import --input '{"locale":"fr","entries":{"nav":{"home":"Accueil"}}}'
+bkn hooks create i18n --script i18n --allow-origin https://your-site.example --rate-limit 300
+```
+
+Worth noting in the port:
+
+- `Accept-Language` is negotiated with its **q-weights**, so
+  `de;q=1.0,fr;q=0.5` picks French when German is not available, and `fr-CA`
+  falls back to `fr` before moving on to the next preference.
+- A key present in the default locale but missing in the requested one renders
+  the default. A half-translated site beats a broken one.
+- A key that resolves nowhere is written to `i18n/missing` with `putIfAbsent`,
+  turning translation from a guessing game into a work queue — and a later
+  import clears it.
+- The bundle carries an **ETag** derived from its content hash, so a client
+  that already has it gets a 304.
+- Imports flatten nested JSON (`nav.home`) and do not overwrite existing
+  values unless told to, so an import cannot silently undo an admin
+  correction.
+
+## redirects
+
+bkn does not serve pages, so this resolves a path and answers with a real
+`301`/`302` an edge proxy can follow — or with JSON for a caller that would
+rather decide itself.
+
+```sh
+bkn hooks create redirects --script redirects --rate-limit 600
+./add-redirect.sh /old-page /new-page 301
+
+curl -sI "https://host/v1/hooks/redirects?path=/old-page"    # 301, Location: /new-page
+curl -s  "https://host/v1/hooks/redirects?path=/old-page&as=json"
+```
+
+Worth noting in the port:
+
+- The rule id is the **hash of the normalised path**, so the common case is one
+  indexed lookup rather than a scan over every rule.
+- Prefix rules are scanned, but the **longest match wins**: `/docs/v1` beats
+  `/docs`.
+- The incoming query string is carried across, because dropping `?utm_source`
+  silently loses attribution.
+- A permanent redirect is cached for an hour and a temporary one is not; a miss
+  is cached briefly, since a rule can appear at any time.
 
 ## Testing them without the real services
 

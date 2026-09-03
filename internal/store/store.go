@@ -8,6 +8,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -54,6 +55,12 @@ func (r Ref) String() string { return r.NS + "/" + r.Coll }
 type Store struct{ db *sql.DB }
 
 func New(db *sql.DB) *Store { return &Store{db: db} }
+
+// Ping checks the datastore is reachable. It is deliberately trivial: a
+// liveness probe should notice a missing database, not measure it.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
 
 // Collection describes a collection and its enforced field normalizers.
 type Collection struct {

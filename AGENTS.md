@@ -129,6 +129,14 @@ internal/daemon/     start/stop/status over health probing
   target the column; going through `json_extract` returns NULL and silently
   matches nothing. That bug made every attempt to batch-resolve references
   return raw ids.
+- **A liveness probe must actually probe something.** `/_health` used to
+  answer 200 because the listener was up, which says only that Go is running.
+  It now pings the datastore with a 500ms deadline and returns 503 when that
+  fails — a probe that can hang is worse than one that lies, so the check stays
+  trivial. Anything deeper belongs on a separate `/_ready`, not here.
+- **Resolve paths through `update.Home()`.** The shutdown token hardcoded
+  `~/.bkn` while everything else honoured `BKN_HOME`, so a deployment that
+  relocated its home scattered one file outside it.
 - **You cannot truncate-write a running binary** — Linux returns ETXTBSY.
   Both `update` and `install` stage beside the target and `rename`, which
   swaps the directory entry without disturbing the running inode.

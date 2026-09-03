@@ -1,11 +1,15 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"github.com/javimosch/bkn/internal/db"
 	"github.com/javimosch/bkn/internal/hooks"
+	"github.com/javimosch/bkn/internal/store"
 )
 
 func TestHookLimiterCountsPerKey(t *testing.T) {
@@ -155,5 +159,51 @@ func TestProxiedRequestsDoNotGetTheLoopbackExemption(t *testing.T) {
 	}
 	if gated.authed(direct) {
 		t.Error("a request with no token passed on a token-gated server")
+	}
+}
+
+// A liveness probe that answers 200 because the listener is up reports only
+// that Go is running. This process is useless without its datastore, so an
+// unreachable one must be a 503 — that is the difference between a probe a
+// supervisor can act on and one that always says yes.
+func TestHealthReportsAnUnreachableDatastore(t *testing.T) {
+	t.Setenv("BKN_DATA", t.TempDir()+"/health.db")
+	conn, err := db.Open()
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	srv := &Server{cfg: Config{Host: "127.0.0.1"}, st: store.New(conn)}
+
+	healthy := httptest.NewRecorder()
+	srv.handleHealth(healthy, httptest.NewRequest(http.MethodGet, "/_health", nil))
+	if healthy.Code != http.StatusOK {
+		t.Errorf("healthy probe = %d, want 200", healthy.Code)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(healthy.Body.Bytes(), &body)
+	if body["ok"] != true || body["service"] != "bkn" || body["pid"] == nil {
+		t.Errorf("healthy body = %v, want ok/service/pid", body)
+	}
+
+	// Take the datastore away underneath it.
+	conn.Close()
+
+	sick := httptest.NewRecorder()
+	srv.handleHealth(sick, httptest.NewRequest(http.MethodGet, "/_health", nil))
+	if sick.Code != http.StatusServiceUnavailable {
+		t.Errorf("probe with a dead datastore = %d, want 503", sick.Code)
+	}
+	_ = json.Unmarshal(sick.Body.Bytes(), &body)
+	if body["ok"] != false {
+		t.Errorf("unhealthy body = %v, want ok:false", body)
+	}
+}
+
+// Relocating BKN_HOME must move everything, including the shutdown token.
+func TestTokenPathFollowsTheToolHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BKN_HOME", home)
+	if got := TokenPath(); got != filepath.Join(home, "shutdown.token") {
+		t.Errorf("TokenPath() = %q, want it inside BKN_HOME", got)
 	}
 }

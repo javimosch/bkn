@@ -27,6 +27,7 @@ import (
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/store"
+	"github.com/javimosch/bkn/internal/update"
 )
 
 // Config configures a serve run.
@@ -67,13 +68,12 @@ func IsLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// TokenPath is where the shutdown token is written so `daemon stop` can read it.
+// TokenPath is where the shutdown token is written so `daemon stop` can read
+// it. It resolves through the tool's home directory rather than hardcoding
+// ~/.bkn, so a deployment that relocates BKN_HOME does not scatter one file
+// outside it.
 func TokenPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".bkn-shutdown.token"
-	}
-	return filepath.Join(home, ".bkn", "shutdown.token")
+	return filepath.Join(update.Home(), "shutdown.token")
 }
 
 // New builds a Server, enforcing the bind-safety rules before anything listens.
@@ -195,9 +195,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 
 	// cli-daemon-spec: health is open so a broken auth config is still probeable.
-	mux.HandleFunc("GET /_health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "bkn", "pid": os.Getpid()})
-	})
+	mux.HandleFunc("GET /_health", s.handleHealth)
 	mux.HandleFunc("POST /_shutdown", s.handleShutdown)
 
 	// cli-guide-spec: the guide is documentation, so it is public.
@@ -236,6 +234,27 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/kv/{key}", s.guard(s.kvDelete))
 
 	return mux
+}
+
+// handleHealth reports liveness, and means it.
+//
+// Answering 200 because the listener is up says only that Go is running. This
+// process is useless without its datastore, so the check touches it - with a
+// trivial query and a hard deadline, because a liveness probe that can hang is
+// worse than one that lies.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	if err := s.st.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"ok": false, "service": "bkn", "pid": os.Getpid(), "reason": "datastore unreachable",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "service": "bkn", "pid": os.Getpid(),
+	})
 }
 
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {

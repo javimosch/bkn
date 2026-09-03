@@ -6,6 +6,17 @@ settings over embedded SQLite, driven from the CLI.
 No database server, no runtime, no admin UI, no container. One static binary
 that is the server, the client, and the migration runner.
 
+**Ported from** [superbackend](https://github.com/javimosch/superbackend) — an
+85k-line Node/Express/MongoDB backend with ~40 admin domains, whose features
+bkn reimplements as nine scripts sitting on seven primitives.
+
+**If you want a UI, use [PocketBase](https://pocketbase.io).** It is the
+closest thing to this and it is very good: one Go binary, embedded SQLite,
+realtime subscriptions, and a genuinely nice admin dashboard. bkn makes the
+opposite trade deliberately — no dashboard, a CLI that *is* the interface, and
+a sandboxed script runtime as the extension point instead of Go hooks. If a
+human is going to click through your data, PocketBase is the better tool.
+
 ```sh
 go build -o bin/bkn .
 
@@ -32,6 +43,44 @@ bkn script run waitlist-digest
 bkn daemon start          # the same primitives over HTTP
 curl -s localhost:7799/_health
 ```
+
+## Why there is no admin UI
+
+This is the decision people push back on, so it deserves an argument rather
+than a slogan.
+
+**The UI was 30% of the system it replaced and the least testable part of it.**
+superbackend's admin was 83 EJS templates, ~36,000 lines — comparable to its
+entire service layer. None of it was covered by a test, none of it could be
+driven by anything but a person, and every feature had to be built twice: once
+as an endpoint and again as a screen.
+
+**A UI is a client, not an interface.** Every one of the nine ported domains
+turned out to be reachable as CLI verbs over a JSON contract; the admin screens
+were a second, unversioned client of that contract. bkn keeps the contract and
+drops the second client. The HTTP API is still there — if you want a dashboard,
+build one against it. bkn just declines to make it the product.
+
+**A CLI can be introspected; a UI cannot.** `bkn help-json` returns every
+command, flag, exit code and environment variable as JSON. `bkn guide` returns
+the mental model, the loop, the concepts and the gotchas — embedded in the
+binary, offline. An agent that has never seen this tool learns to drive it in
+two calls. There is no equivalent for a screen: the only way to find out what a
+dashboard does is to look at it.
+
+**Composability is the whole point.**
+
+```sh
+bkn store list shop/orders --where 'total>100' --order-by total:desc   | jq -r '.records[] | [.id, .total] | @tsv'
+```
+
+That is a sentence. The dashboard equivalent is a screenshot.
+
+**The honest counterargument.** A UI is genuinely better for browsing data you
+cannot yet describe, and it lets non-technical operators work without a
+terminal. bkn loses both. That is a real cost, and if it matters to you,
+PocketBase already solved it well. This is a scope decision about what belongs
+in the core — not a claim that UIs are bad.
 
 ## Why so few primitives
 
@@ -342,6 +391,12 @@ payload: {tool, version, event, verb, os, arch, exit_class, ts}
 ```
 
 `install_id` is omitted entirely, which the spec calls the safer default.
+
+**No collector is running yet.** The endpoint follows the convention the rest
+of these tools use (`feedback.intrane.fr/v1/telemetry`), but the relay
+currently serves only `/v1/feedback`, so an enabled sender posts into a void —
+silently, with no retry and no effect on the exit code, which is exactly what
+the spec asks for from an unreachable collector.
 
 ## Deployment
 

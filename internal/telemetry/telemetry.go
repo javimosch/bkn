@@ -19,10 +19,18 @@ import (
 	"time"
 )
 
-// DefaultEndpoint is overridable so an organisation can point this at its own
-// collector - and so a reviewer can aim it somewhere harmless to see what it
-// actually sends.
-const DefaultEndpoint = "https://telemetry.intrane.fr/e"
+// DefaultEndpoint follows the convention the rest of these tools use: the
+// feedback relay's host, under /v1/telemetry.
+//
+// No collector implements that route yet - the relay currently serves only
+// /v1/feedback - so an enabled sender posts into a void. That is the spec's
+// intended behaviour for an unreachable collector (silent, no retry, no
+// effect on the exit code), and pointing at the convention now means bkn
+// starts working the day the route exists, with no release.
+//
+// Overridable so an organisation can point this at its own collector, and so
+// a reviewer can aim it somewhere harmless to see what it actually sends.
+const DefaultEndpoint = "https://feedback.intrane.fr/v1/telemetry"
 
 // Events. Exactly three, per the spec; a tool must not invent more.
 const (

@@ -20,6 +20,11 @@ export BKN_ENCRYPTION_KEY=$(openssl rand -hex 32)
 bkn kv set myapp.stripe sk_live_xxx --type encrypted
 bkn kv get myapp.stripe
 
+echo -n 'correct-horse-battery' | bkn auth user create ada@example.io --password-stdin
+bkn auth org create acme --name "Acme Inc"
+bkn auth member add acme ada@example.io --role owner
+echo -n 'correct-horse-battery' | bkn auth login ada@example.io --password-stdin --org acme
+
 bkn script test --file digest.js --input '{"limit":10}'
 bkn script create waitlist-digest --file digest.js
 bkn script run waitlist-digest
@@ -45,6 +50,33 @@ the core lacks an escape hatch. So the core is small on purpose — **store**,
 **kv**, and **script** — with everything else built on top rather than beside
 them.
 
+## Identity, without billing
+
+`auth` holds users, organizations, memberships and tokens. Emails are
+normalized in exactly one place. Passwords are bcrypt, so hashes written by the
+Node backend's `bcryptjs` keep verifying — checked in both directions.
+
+Access tokens are short-lived HS256 JWTs carrying `sub`, `email`, `role`, `org`
+and `org_role`. Refresh tokens are opaque, stored only as a digest, and
+single-use: every refresh rotates them, so a stolen one dies the moment the
+real holder refreshes. Changing a password or disabling a user revokes that
+user's sessions immediately.
+
+Platform roles (`user`, `admin`) govern the deployment. Organization roles
+(`owner` > `admin` > `member`) govern a tenant. A platform admin is **not**
+implicitly an owner of anybody's organization.
+
+What `auth` deliberately does **not** hold is billing. In the Node backend,
+`subscriptionStatus`, `currentPlan` and `stripeCustomerId` lived on the user
+record, and the absence of an endpoint to write `stripeCustomerId` is what
+drove a consumer to bypass the API and write MongoDB directly. Billing goes in
+a store collection:
+
+```sh
+bkn store put billing/subjects --id <user-id> \
+  --data '{"plan":"pro","status":"active","stripe_customer_id":"cus_x"}'
+```
+
 ## Scripts are the escape hatch
 
 Most of those 40 domains were a scheduled HTTP call, a transform over stored
@@ -60,8 +92,8 @@ function main(input) {
 ```
 
 A script must define `main(input)`; its return value is the run's result. It
-gets `bkn.store`, `bkn.kv`, `bkn.http.fetch`, `console.log`, `bkn.id()` and
-`bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
+gets `bkn.store`, `bkn.kv`, `bkn.auth`, `bkn.http.fetch`, `console.log`,
+`bkn.id()` and `bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
 `require`, and no network beyond its own `allow_net` list. Every run is bounded
 by `timeout_ms` and recorded with its status, logs, result and duration.
 
@@ -72,6 +104,12 @@ allow-listed name from reaching the cloud metadata endpoint.
 
 There is no event loop: `bkn.http.fetch` blocks and returns its response, and
 there are no promises or `async`/`await`.
+
+The trust model is worth stating plainly: **scripts are operator code, not
+tenant code.** A script already reads decrypted secrets through `bkn.kv`, and
+`bkn.auth.issue` can mint a session for any user — which is what makes SSO
+callbacks and invite acceptance scriptable. Review a script the way you would
+review core.
 
 ## Conformance
 
@@ -93,6 +131,7 @@ Built to the agent-first CLI spec family — <https://cli-specs.intrane.fr>.
 | `BKN_DATA` | datastore path (default `~/.bkn/bkn.db`) |
 | `BKN_HOST` / `BKN_PORT` | serve bind defaults (`127.0.0.1` / `7799`); flags win |
 | `BKN_ADMIN_TOKEN` | bearer token gating every non-public HTTP route; **required** to bind off-loopback |
+| `BKN_AUTH_SECRET` | token signing secret; generated and stored in `kv` if unset |
 | `BKN_SCRIPT_ALLOW_PRIVATE_NET` | `1` lets scripts reach loopback and private addresses |
 | `BKN_ENCRYPTION_KEY` | single key, hex-64 / base64-32 / 32 literal chars; stamped as keyId `v1` |
 | `BKN_ENCRYPTION_KEYS` | `v1:<material>,v2:<material>` — every key that can decrypt |
@@ -116,7 +155,6 @@ the rest.
 
 ## Status
 
-Scaffold. `store`, `kv` and `script` are complete and tested; `auth`, `files`,
-`events` and `cron` are the remaining core primitives.
-
-~3,700 lines of implementation, ~800 of tests, one 19 MB static binary.
+Scaffold. `store`, `kv`, `script` and `auth` are complete and tested; `files`,
+`events` and `cron` are the remaining core primitives, after which the old
+system's domains get ported as scripts.

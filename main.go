@@ -53,6 +53,8 @@ func main() {
 		cmdKV(rest)
 	case "script":
 		cmdScript(rest)
+	case "auth":
+		cmdAuth(rest)
 	case "serve":
 		cmdServe(rest)
 	case "daemon":

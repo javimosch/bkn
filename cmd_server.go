@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/daemon"
 	"github.com/javimosch/bkn/internal/out"
 	"github.com/javimosch/bkn/internal/script"
@@ -39,9 +40,13 @@ func cmdServe(args []string) {
 	st := store.New(conn)
 	k := newKV(conn)
 	reg := script.NewRegistry(conn)
+	a, err := auth.New(conn, k)
+	if err != nil {
+		failAuth(err)
+	}
 	srv, err := server.New(
 		server.Config{Host: *host, Port: *port, Version: Version},
-		st, k, reg, script.NewRunner(reg, st, k),
+		st, k, reg, script.NewRunner(reg, st, k, a), a,
 	)
 	if err != nil {
 		out.Fail(out.InvalidValue, "unsafe_bind", err.Error(),

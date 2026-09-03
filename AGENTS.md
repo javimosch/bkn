@@ -2,9 +2,10 @@
 
 ## What this is
 
-A single static binary providing three backend primitives — `store` (namespaced
-document collections), `kv` (typed, optionally encrypted settings), and
-`script` (sandboxed JavaScript over both) — on embedded SQLite. The CLI is the
+A single static binary providing four backend primitives — `store` (namespaced
+document collections), `kv` (typed, optionally encrypted settings), `auth`
+(users, organizations, memberships, tokens), and `script` (sandboxed
+JavaScript over all of them) — on embedded SQLite. The CLI is the
 primary interface; HTTP mirrors it.
 
 ## The rules that shape the code
@@ -28,7 +29,11 @@ primary interface; HTTP mirrors it.
    push an invariant out to callers.
 5. **Fail loudly, never downgrade.** An encrypted write with no key configured
    is an error, not a plaintext write.
-6. **The sandbox boundary must stay readable in one sitting.** Everything a
+6. **Identity is not billing, and not anything else that happens to hang off a
+   user.** `auth` grew a subscription field in the previous system and that is
+   precisely what made it unchangeable. Anything that is not needed to answer
+   "who is this and what may they do" belongs in a store collection.
+7. **The sandbox boundary must stay readable in one sitting.** Everything a
    script can reach is in `internal/script/host.go`. Keep it that way; a
    capability added anywhere else is a capability nobody will audit.
 
@@ -52,6 +57,7 @@ flags.go             permuting flag parser (stdlib flag stops at positionals)
 cmd_store.go         store subcommands
 cmd_kv.go            kv subcommands
 cmd_script.go        script subcommands
+cmd_auth.go          auth subcommands
 cmd_server.go        serve + daemon subcommands
 cmd_meta.go          guide, help-json, help
 internal/out/        output contract: envelopes, exit codes, typed errors
@@ -79,6 +85,16 @@ internal/daemon/     start/stop/status over health probing
 - **`modernc.org/sqlite`, not `mattn/go-sqlite3`.** The latter needs cgo, which
   costs the static single binary. `go.mod` pins a toolchain newer than the
   system Go; `GOTOOLCHAIN=auto` (the default) fetches it.
+- **A silent no-op edit left `help-json` incomplete for a whole release.** A
+  scripted edit anchored on a line whose spacing `gofmt` had since changed
+  matched nothing, and the spot-check test only asserted five command names,
+  so an entire namespace was missing from the catalog while every test passed.
+  `TestGuideAndHelpJSONAgree` now enforces a bijection between the embedded
+  guide and the catalog in both directions. Always verify a scripted edit
+  actually applied.
+- **The JWT verifier pins HS256 rather than reading `alg` from the token.**
+  That is deliberate and tested — `alg: none` is the classic way to turn a
+  signed token into an unsigned one.
 - **A goja `Runtime` is not safe for concurrent use.** Every run builds a fresh
   one, which also stops one script leaving state behind for the next.
 - **goja appends a Go symbol chain to host errors.** `cleanError` strips the

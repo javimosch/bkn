@@ -186,7 +186,7 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 		},
 	}
 
-	return map[string]any{
+	api := map[string]any{
 		"store": storeAPI,
 		"kv":    kvAPI,
 		"http":  map[string]any{"fetch": r.fetchFunc(vm, s, throw)},
@@ -201,6 +201,10 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 		"id":  func() string { return store.NewID() },
 		"now": func() string { return time.Now().UTC().Format(time.RFC3339) },
 	}
+	if authAPI := r.newAuthAPI(throw); authAPI != nil {
+		api["auth"] = authAPI
+	}
+	return api
 }
 
 func toInt(v any) (int, bool) {

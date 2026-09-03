@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/db"
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
@@ -54,26 +55,55 @@ func helpJSON() map[string]any {
 		"output":      "json",
 		"interactive": false,
 		"commands": map[string]any{
-			"version":           c(none, none),
-			"help-json":         c(none, none),
-			"guide":             c(none, []string{"--human"}),
-			"store create":      c([]string{"ref"}, []string{"--normalize <field=rule>"}),
-			"store put":         c([]string{"ref"}, []string{"--data <json|@file|->", "--id <id>"}),
-			"store get":         c([]string{"ref", "id"}, none),
-			"store find":        c([]string{"ref"}, []string{"--where <field=value>"}),
-			"store list":        c([]string{"ref"}, []string{"--where <field=value>", "--limit <n>", "--offset <n>"}),
-			"store patch":       c([]string{"ref", "id"}, []string{"--data <json|@file|->"}),
-			"store delete":      c([]string{"ref", "id"}, none),
-			"store collections": c(none, []string{"--ns <namespace>"}),
-			"kv get":            c([]string{"key"}, none),
-			"kv set":            c([]string{"key", "value"}, []string{"--type <string|json|encrypted>", "--description <text>", "--public", "--stdin"}),
-			"kv list":           c(none, []string{"--prefix <p>", "--public"}),
-			"kv delete":         c([]string{"key"}, none),
-			"kv rekey":          c(none, none),
-			"serve":             c(none, []string{"--host <h>", "--port <n>"}),
-			"daemon start":      c(none, []string{"--host <h>", "--port <n>"}),
-			"daemon stop":       c(none, []string{"--host <h>", "--port <n>"}),
-			"daemon status":     c(none, []string{"--host <h>", "--port <n>"}),
+			"version":            c(none, none),
+			"help-json":          c(none, none),
+			"guide":              c(none, []string{"--human"}),
+			"store create":       c([]string{"ref"}, []string{"--normalize <field=rule>"}),
+			"store put":          c([]string{"ref"}, []string{"--data <json|@file|->", "--id <id>"}),
+			"store get":          c([]string{"ref", "id"}, none),
+			"store find":         c([]string{"ref"}, []string{"--where <field=value>"}),
+			"store list":         c([]string{"ref"}, []string{"--where <field=value>", "--limit <n>", "--offset <n>"}),
+			"store patch":        c([]string{"ref", "id"}, []string{"--data <json|@file|->"}),
+			"store delete":       c([]string{"ref", "id"}, none),
+			"store collections":  c(none, []string{"--ns <namespace>"}),
+			"kv get":             c([]string{"key"}, none),
+			"kv set":             c([]string{"key", "value"}, []string{"--type <string|json|encrypted>", "--description <text>", "--public", "--stdin"}),
+			"kv list":            c(none, []string{"--prefix <p>", "--public"}),
+			"kv delete":          c([]string{"key"}, none),
+			"kv rekey":           c(none, none),
+			"script create":      c([]string{"name"}, []string{"--file <path|->", "--description <text>", "--timeout <ms>", "--allow-net <hosts>"}),
+			"script test":        c(none, []string{"--file <path|->", "--input <json>", "--timeout <ms>", "--allow-net <hosts>"}),
+			"script run":         c([]string{"name"}, []string{"--input <json|@file|->"}),
+			"script list":        c(none, none),
+			"script show":        c([]string{"name"}, none),
+			"script update":      c([]string{"name"}, []string{"--file <path>", "--description <text>", "--timeout <ms>", "--allow-net <hosts>", "--enable", "--disable"}),
+			"script delete":      c([]string{"name"}, none),
+			"script runs":        c([]string{"name"}, []string{"--limit <n>"}),
+			"auth user create":   c([]string{"email"}, []string{"--password-stdin", "--password <p>", "--name <n>", "--role <user|admin>"}),
+			"auth user list":     c(none, []string{"--limit <n>", "--offset <n>"}),
+			"auth user show":     c([]string{"email|id"}, none),
+			"auth user update":   c([]string{"email|id"}, []string{"--name <n>", "--role <r>", "--password-stdin", "--enable", "--disable"}),
+			"auth user delete":   c([]string{"email|id"}, none),
+			"auth login":         c([]string{"email"}, []string{"--password-stdin", "--password <p>", "--org <slug>"}),
+			"auth me":            c([]string{"access-token"}, none),
+			"auth refresh":       c([]string{"refresh-token"}, none),
+			"auth switch-org":    c([]string{"refresh-token", "org"}, none),
+			"auth logout":        c([]string{"refresh-token"}, none),
+			"auth sessions":      c([]string{"user"}, none),
+			"auth revoke":        c([]string{"user"}, none),
+			"auth memberships":   c([]string{"user"}, none),
+			"auth can":           c([]string{"user", "org", "min-role"}, none),
+			"auth org create":    c([]string{"slug"}, []string{"--name <n>"}),
+			"auth org list":      c(none, none),
+			"auth org show":      c([]string{"slug|id"}, none),
+			"auth org delete":    c([]string{"slug|id"}, none),
+			"auth member add":    c([]string{"org", "user"}, []string{"--role <owner|admin|member>"}),
+			"auth member remove": c([]string{"org", "user"}, none),
+			"auth member list":   c([]string{"org"}, none),
+			"serve":              c(none, []string{"--host <h>", "--port <n>"}),
+			"daemon start":       c(none, []string{"--host <h>", "--port <n>"}),
+			"daemon stop":        c(none, []string{"--host <h>", "--port <n>"}),
+			"daemon status":      c(none, []string{"--host <h>", "--port <n>"}),
 		},
 		"exit_codes": map[string]string{
 			"0":   "success",
@@ -88,7 +118,7 @@ func helpJSON() map[string]any {
 		"env": []string{
 			"BKN_DATA", "BKN_HOST", "BKN_PORT", "BKN_ADMIN_TOKEN",
 			"BKN_ENCRYPTION_KEY", "BKN_ENCRYPTION_KEYS", "BKN_ENCRYPTION_KEY_ID",
-			"BKN_SCRIPT_ALLOW_PRIVATE_NET",
+			"BKN_SCRIPT_ALLOW_PRIVATE_NET", "BKN_AUTH_SECRET",
 			"SUPERBACKEND_ENCRYPTION_KEY", "SAASBACKEND_ENCRYPTION_KEY",
 		},
 		"defaults": map[string]any{
@@ -99,6 +129,11 @@ func helpJSON() map[string]any {
 			"kv_types":          kv.ValidTypes(),
 			"normalizers":       store.ValidNormalizers(),
 			"script_timeout_ms": script.DefaultTimeoutMS,
+			"global_roles":      auth.GlobalRoles(),
+			"org_roles":         auth.OrgRoles(),
+			"access_ttl":        auth.AccessTTL.String(),
+			"refresh_ttl":       auth.RefreshTTL.String(),
+			"min_password_len":  auth.MinPasswordLen,
 		},
 		"see_also": []string{"bkn guide"},
 	}
@@ -124,7 +159,16 @@ func printHelp() {
     bkn kv delete <key>
     bkn kv rekey
 
-  script  sandboxed JavaScript over store + kv
+  auth    users, organizations, memberships, tokens
+    bkn auth user create <email> --password-stdin [--name N] [--role R]
+    bkn auth login <email> --password-stdin [--org <slug>]
+    bkn auth me <access-token> | refresh <t> | logout <t> | switch-org <t> <org>
+    bkn auth org create <slug> | list | show <slug> | delete <slug>
+    bkn auth member add <org> <user> [--role R] | remove | list
+    bkn auth can <user> <org> <owner|admin|member>
+    bkn auth sessions <user> | revoke <user> | memberships <user>
+
+  script  sandboxed JavaScript over store, kv and auth
     bkn script create <name> --file <path> [--allow-net hosts] [--timeout MS]
     bkn script test --file <path> [--input <json>]
     bkn script run <name> [--input <json>]

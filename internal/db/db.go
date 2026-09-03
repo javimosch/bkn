@@ -32,6 +32,46 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS records_ns_coll ON records(ns, coll, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  email         TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  name          TEXT NOT NULL DEFAULT '',
+  role          TEXT NOT NULL DEFAULT 'user',
+  disabled      INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS orgs (
+  id         TEXT PRIMARY KEY,
+  slug       TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memberships (
+  org_id     TEXT NOT NULL,
+  user_id    TEXT NOT NULL,
+  role       TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (org_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS memberships_user ON memberships(user_id);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  org_id     TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS sessions_hash ON sessions(token_hash);
+
 CREATE TABLE IF NOT EXISTS scripts (
   name        TEXT PRIMARY KEY,
   code        TEXT NOT NULL,

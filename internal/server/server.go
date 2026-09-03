@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/script"
@@ -33,14 +34,16 @@ type Config struct {
 
 // Server wires the primitives to HTTP routes.
 type Server struct {
-	cfg    Config
-	st     *store.Store
-	kv     *kv.KV
-	reg    *script.Registry
-	runner *script.Runner
-	token  string // shutdown token, non-empty only when bound off-loopback
-	admin  string // BKN_ADMIN_TOKEN, gates every non-public route
-	srv    *http.Server
+	cfg      Config
+	st       *store.Store
+	kv       *kv.KV
+	reg      *script.Registry
+	runner   *script.Runner
+	auth     *auth.Auth
+	throttle *loginThrottle
+	token    string // shutdown token, non-empty only when bound off-loopback
+	admin    string // BKN_ADMIN_TOKEN, gates every non-public route
+	srv      *http.Server
 }
 
 // IsLoopback reports whether host addresses only the local machine.
@@ -62,8 +65,11 @@ func TokenPath() string {
 }
 
 // New builds a Server, enforcing the bind-safety rules before anything listens.
-func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner) (*Server, error) {
-	s := &Server{cfg: cfg, st: st, kv: k, reg: reg, runner: runner, admin: os.Getenv("BKN_ADMIN_TOKEN")}
+func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner, a *auth.Auth) (*Server, error) {
+	s := &Server{
+		cfg: cfg, st: st, kv: k, reg: reg, runner: runner, auth: a,
+		throttle: newLoginThrottle(), admin: os.Getenv("BKN_ADMIN_TOKEN"),
+	}
 
 	if !IsLoopback(cfg.Host) {
 		// Off-loopback the box is reachable by others, so neither the data
@@ -170,6 +176,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/store/{ns}/{coll}/{id}", s.guard(s.storeGet))
 	mux.HandleFunc("PATCH /v1/store/{ns}/{coll}/{id}", s.guard(s.storePatch))
 	mux.HandleFunc("DELETE /v1/store/{ns}/{coll}/{id}", s.guard(s.storeDelete))
+
+	s.authRoutes(mux)
 
 	mux.HandleFunc("GET /v1/script", s.guard(s.scriptList))
 	mux.HandleFunc("POST /v1/script/{name}/run", s.guard(s.scriptRun))

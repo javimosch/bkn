@@ -9,19 +9,23 @@ import (
 
 	"github.com/dop251/goja"
 
+	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/store"
 )
 
 // Runner executes scripts against the core primitives.
 type Runner struct {
-	reg *Registry
-	st  *store.Store
-	kv  *kv.KV
+	reg  *Registry
+	st   *store.Store
+	kv   *kv.KV
+	auth *auth.Auth
 }
 
-func NewRunner(reg *Registry, st *store.Store, k *kv.KV) *Runner {
-	return &Runner{reg: reg, st: st, kv: k}
+// NewRunner builds a runner. a may be nil, in which case scripts simply have
+// no bkn.auth namespace rather than a broken one.
+func NewRunner(reg *Registry, st *store.Store, k *kv.KV, a *auth.Auth) *Runner {
+	return &Runner{reg: reg, st: st, kv: k, auth: a}
 }
 
 // Result is the outcome of one execution.

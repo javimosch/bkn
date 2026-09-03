@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/out"
 	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/store"
@@ -67,7 +68,13 @@ func cmdScript(args []string) {
 	conn := open()
 	defer conn.Close()
 	reg := script.NewRegistry(conn)
-	runner := script.NewRunner(reg, store.New(conn), newKV(conn))
+	st := store.New(conn)
+	k := newKV(conn)
+	a, err := auth.New(conn, k)
+	if err != nil {
+		failAuth(err)
+	}
+	runner := script.NewRunner(reg, st, k, a)
 
 	switch sub {
 	case "create":

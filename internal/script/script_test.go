@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/db"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/script"
@@ -27,8 +28,13 @@ func newParts(t *testing.T, conn *sql.DB) (*script.Registry, *script.Runner, *st
 	t.Helper()
 	kr, _ := kv.LoadKeyring()
 	st := store.New(conn)
+	k := kv.New(conn, kr, 0)
 	reg := script.NewRegistry(conn)
-	return reg, script.NewRunner(reg, st, kv.New(conn, kr, 0)), st
+	a, err := auth.New(conn, k)
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	return reg, script.NewRunner(reg, st, k, a), st
 }
 
 func run(t *testing.T, r *script.Runner, code string, input any) script.Result {

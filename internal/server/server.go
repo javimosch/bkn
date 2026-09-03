@@ -141,12 +141,32 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
+// proxied reports that a request reached us through a reverse proxy rather
+// than directly.
+//
+// This is the difference between a safe deployment and an open one. The
+// loopback exemption below reasons that only a co-resident process can reach
+// 127.0.0.1 — true of a laptop, false the moment nginx, Caddy or Traefik
+// listens publicly and forwards to a loopback-bound backend, which is the
+// standard way to deploy this. A forwarded request is not a local one, so it
+// never gets the exemption.
+func proxied(r *http.Request) bool {
+	for _, header := range []string{"X-Forwarded-For", "X-Forwarded-Host",
+		"X-Real-Ip", "Forwarded", "X-Forwarded-Proto"} {
+		if r.Header.Get(header) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // authed gates every route that is not explicitly public. With no admin token
-// configured, a loopback-bound server is open (single-user dev default); an
-// off-loopback one never reaches here because New refuses to build it.
+// configured, a directly-reached loopback server is open (the single-user dev
+// default); an off-loopback one never reaches here because New refuses to
+// build it.
 func (s *Server) authed(r *http.Request) bool {
 	if s.admin == "" {
-		return IsLoopback(s.cfg.Host)
+		return IsLoopback(s.cfg.Host) && !proxied(r)
 	}
 	return subtle.ConstantTimeCompare([]byte(bearer(r)), []byte(s.admin)) == 1
 }
@@ -518,6 +538,13 @@ func (s *Server) ListenAndServe() error {
 	// cli-daemon-spec §1: one confirmation line on stderr, flushed before the
 	// accept loop, so a scripted "launch then poll" has something to wait on.
 	fmt.Fprintf(os.Stderr, "[serve] listening on http://%s\n", addr)
+	if s.admin == "" && IsLoopback(s.cfg.Host) {
+		// Say it at startup, because the failure mode is silent: everything
+		// works, and the data is public.
+		fmt.Fprintf(os.Stderr, "[serve] no BKN_ADMIN_TOKEN: admin routes are open to "+
+			"direct local callers. Requests arriving through a proxy are refused; "+
+			"set BKN_ADMIN_TOKEN before putting this behind one.\n")
+	}
 	if s.token != "" {
 		fmt.Fprintf(os.Stderr, "[serve] off-loopback bind: shutdown token at %s\n", TokenPath())
 	}

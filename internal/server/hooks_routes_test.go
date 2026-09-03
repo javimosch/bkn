@@ -123,3 +123,37 @@ func TestHookBodyHonoursTheScriptsContentType(t *testing.T) {
 		})
 	}
 }
+
+// A loopback bind means "only a co-resident process can reach me" — until a
+// reverse proxy listens publicly and forwards here, which is the standard
+// deployment. A forwarded request must not inherit local trust.
+func TestProxiedRequestsDoNotGetTheLoopbackExemption(t *testing.T) {
+	open := &Server{cfg: Config{Host: "127.0.0.1"}}
+
+	direct := httptest.NewRequest(http.MethodGet, "/v1/store/a/b", nil)
+	if !open.authed(direct) {
+		t.Error("a direct loopback request was refused on an open server")
+	}
+
+	for _, header := range []string{
+		"X-Forwarded-For", "X-Forwarded-Host", "X-Real-Ip", "Forwarded", "X-Forwarded-Proto",
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/v1/store/a/b", nil)
+		r.Header.Set(header, "203.0.113.9")
+		if open.authed(r) {
+			t.Errorf("a request carrying %s was treated as local", header)
+		}
+	}
+
+	// With a token configured, the token decides and nothing else does.
+	gated := &Server{cfg: Config{Host: "127.0.0.1"}, admin: "s3cret"}
+	withToken := httptest.NewRequest(http.MethodGet, "/v1/store/a/b", nil)
+	withToken.Header.Set("Authorization", "Bearer s3cret")
+	withToken.Header.Set("X-Forwarded-For", "203.0.113.9")
+	if !gated.authed(withToken) {
+		t.Error("a valid token was refused because the request was proxied")
+	}
+	if gated.authed(direct) {
+		t.Error("a request with no token passed on a token-gated server")
+	}
+}

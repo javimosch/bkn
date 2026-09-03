@@ -343,6 +343,23 @@ payload: {tool, version, event, verb, os, arch, exit_class, ts}
 
 `install_id` is omitted entirely, which the spec calls the safer default.
 
+## Deployment
+
+The reference deployment is `bkn.intrane.fr` — systemd on loopback, Traefik for
+TLS, Cloudflare for DNS. See [`docs/deploy.md`](docs/deploy.md).
+
+One hazard is worth repeating here. `serve` binds loopback and, with no
+`BKN_ADMIN_TOKEN`, treats that as "only a co-resident process can reach me" —
+true on a laptop, **false behind a public reverse proxy**, which is the normal
+way to deploy this. bkn refuses the loopback exemption for any request carrying
+a forwarding header and warns at startup, but set `BKN_ADMIN_TOKEN` regardless:
+it is the thing that actually gates the admin routes.
+
+```
+$ curl -s -o /dev/null -w '%{http_code}\n' https://bkn.intrane.fr/v1/kv
+403
+```
+
 ## Status
 
 The core primitives — `store`, `kv`, `auth`, `files`, `events`, `cron`,

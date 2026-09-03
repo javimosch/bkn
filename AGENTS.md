@@ -2,10 +2,11 @@
 
 ## What this is
 
-A single static binary providing four backend primitives — `store` (namespaced
+A single static binary providing five backend primitives — `store` (namespaced
 document collections), `kv` (typed, optionally encrypted settings), `auth`
-(users, organizations, memberships, tokens), and `script` (sandboxed
-JavaScript over all of them) — on embedded SQLite. The CLI is the
+(users, organizations, memberships, tokens), `files` (namespaced blobs, local
+or S3), and `script` (sandboxed JavaScript over all of them) — on embedded
+SQLite. The CLI is the
 primary interface; HTTP mirrors it.
 
 ## The rules that shape the code
@@ -58,6 +59,7 @@ cmd_store.go         store subcommands
 cmd_kv.go            kv subcommands
 cmd_script.go        script subcommands
 cmd_auth.go          auth subcommands
+cmd_files.go         files subcommands
 cmd_server.go        serve + daemon subcommands
 cmd_meta.go          guide, help-json, help
 internal/out/        output contract: envelopes, exit codes, typed errors
@@ -85,6 +87,18 @@ internal/daemon/     start/stop/status over health probing
 - **`modernc.org/sqlite`, not `mattn/go-sqlite3`.** The latter needs cgo, which
   costs the static single binary. `go.mod` pins a toolchain newer than the
   system Go; `GOTOOLCHAIN=auto` (the default) fetches it.
+- **Never derive a storage path from a user-supplied name.** Blobs are stored
+  under their content hash, which makes traversal structurally impossible
+  instead of a validation problem. The name check in `ValidateName` is a
+  second line, not the first.
+- **Serving uploads inline from the API origin is stored XSS.** `inlineTypes`
+  in `internal/server/files_routes.go` is an allow-list, and SVG is excluded
+  from it deliberately despite being an image. Adding a type to that map is a
+  security decision.
+- **Lazy-resolve credentials.** `auth.New` used to generate and store the token
+  signing secret eagerly, so `bkn script test` provisioned a credential it
+  never used and printed a warning about it. Anything that creates a secret
+  belongs behind first use.
 - **A silent no-op edit left `help-json` incomplete for a whole release.** A
   scripted edit anchored on a line whose spacing `gofmt` had since changed
   matched nothing, and the spot-check test only asserted five command names,
@@ -109,6 +123,15 @@ internal/daemon/     start/stop/status over health probing
   every stored secret. Bidirectional compatibility is verified in the tests.
 
 ## Build and test
+
+The S3 signer is verified against a live server, not just a stub. Run it when
+touching `internal/files/s3.go`:
+
+```sh
+docker run -d --rm -p 9123:9000 -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin quay.io/minio/minio server /data
+BKN_S3_TEST_ENDPOINT=http://127.0.0.1:9123 go test ./internal/files/
+```
 
 ```sh
 go test ./...

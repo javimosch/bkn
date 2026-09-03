@@ -93,7 +93,11 @@ func (a *Auth) issue(u User, orgIDOrSlug string) (Tokens, error) {
 		ExpiresAt: issuedAt.Add(AccessTTL).Unix(),
 		TokenID:   sessionID,
 	}
-	access, err := signJWT(claims, a.secret)
+	secret, err := a.signingKey()
+	if err != nil {
+		return Tokens{}, err
+	}
+	access, err := signJWT(claims, secret)
 	if err != nil {
 		return Tokens{}, err
 	}
@@ -139,7 +143,11 @@ func (a *Auth) IssueFor(idOrEmail, orgIDOrSlug string) (Tokens, error) {
 // revoked session's access token stays valid until it expires, which is why
 // AccessTTL is short.
 func (a *Auth) Verify(token string) (Claims, error) {
-	return parseJWT(token, a.secret)
+	secret, err := a.signingKey()
+	if err != nil {
+		return Claims{}, err
+	}
+	return parseJWT(token, secret)
 }
 
 // Me resolves an access token to the live user record, so a disabled or

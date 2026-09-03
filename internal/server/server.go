@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/javimosch/bkn/internal/auth"
+	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/script"
@@ -40,6 +41,7 @@ type Server struct {
 	reg      *script.Registry
 	runner   *script.Runner
 	auth     *auth.Auth
+	files    *files.Store
 	throttle *loginThrottle
 	token    string // shutdown token, non-empty only when bound off-loopback
 	admin    string // BKN_ADMIN_TOKEN, gates every non-public route
@@ -65,9 +67,9 @@ func TokenPath() string {
 }
 
 // New builds a Server, enforcing the bind-safety rules before anything listens.
-func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner, a *auth.Auth) (*Server, error) {
+func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner, a *auth.Auth, f *files.Store) (*Server, error) {
 	s := &Server{
-		cfg: cfg, st: st, kv: k, reg: reg, runner: runner, auth: a,
+		cfg: cfg, st: st, kv: k, reg: reg, runner: runner, auth: a, files: f,
 		throttle: newLoginThrottle(), admin: os.Getenv("BKN_ADMIN_TOKEN"),
 	}
 
@@ -178,6 +180,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/store/{ns}/{coll}/{id}", s.guard(s.storeDelete))
 
 	s.authRoutes(mux)
+	s.filesRoutes(mux)
 
 	mux.HandleFunc("GET /v1/script", s.guard(s.scriptList))
 	mux.HandleFunc("POST /v1/script/{name}/run", s.guard(s.scriptRun))

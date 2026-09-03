@@ -7,6 +7,7 @@ import (
 
 	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/daemon"
+	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/out"
 	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/server"
@@ -40,13 +41,14 @@ func cmdServe(args []string) {
 	st := store.New(conn)
 	k := newKV(conn)
 	reg := script.NewRegistry(conn)
+	fileStore := files.New(conn, files.NewLocal(""), s3OrNil())
 	a, err := auth.New(conn, k)
 	if err != nil {
 		failAuth(err)
 	}
 	srv, err := server.New(
 		server.Config{Host: *host, Port: *port, Version: Version},
-		st, k, reg, script.NewRunner(reg, st, k, a), a,
+		st, k, reg, script.NewRunner(reg, st, k, a, fileStore), a, fileStore,
 	)
 	if err != nil {
 		out.Fail(out.InvalidValue, "unsafe_bind", err.Error(),

@@ -8,6 +8,7 @@ import (
 
 	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/db"
+	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/out"
@@ -100,6 +101,14 @@ func helpJSON() map[string]any {
 			"auth member add":    c([]string{"org", "user"}, []string{"--role <owner|admin|member>"}),
 			"auth member remove": c([]string{"org", "user"}, none),
 			"auth member list":   c([]string{"org"}, none),
+			"files ns create":    c([]string{"name"}, []string{"--backend <local|s3>", "--max-bytes <n>", "--allow-type <type>", "--public"}),
+			"files ns list":      c(none, none),
+			"files ns delete":    c([]string{"name"}, none),
+			"files put":          c([]string{"namespace", "path"}, []string{"--name <n>", "--content-type <t>", "--meta <json>", "--overwrite", "--stdin"}),
+			"files get":          c([]string{"namespace", "name"}, []string{"--out <path>"}),
+			"files show":         c([]string{"namespace", "name"}, none),
+			"files list":         c([]string{"namespace"}, []string{"--limit <n>", "--offset <n>"}),
+			"files delete":       c([]string{"namespace", "name"}, none),
 			"serve":              c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon start":       c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon stop":        c(none, []string{"--host <h>", "--port <n>"}),
@@ -118,7 +127,8 @@ func helpJSON() map[string]any {
 		"env": []string{
 			"BKN_DATA", "BKN_HOST", "BKN_PORT", "BKN_ADMIN_TOKEN",
 			"BKN_ENCRYPTION_KEY", "BKN_ENCRYPTION_KEYS", "BKN_ENCRYPTION_KEY_ID",
-			"BKN_SCRIPT_ALLOW_PRIVATE_NET", "BKN_AUTH_SECRET",
+			"BKN_SCRIPT_ALLOW_PRIVATE_NET", "BKN_AUTH_SECRET", "BKN_FILES_DIR",
+			"S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_FORCE_PATH_STYLE",
 			"SUPERBACKEND_ENCRYPTION_KEY", "SAASBACKEND_ENCRYPTION_KEY",
 		},
 		"defaults": map[string]any{
@@ -134,6 +144,9 @@ func helpJSON() map[string]any {
 			"access_ttl":        auth.AccessTTL.String(),
 			"refresh_ttl":       auth.RefreshTTL.String(),
 			"min_password_len":  auth.MinPasswordLen,
+			"files_dir":         files.DefaultLocalRoot(),
+			"file_backends":     files.Backends(),
+			"file_max_bytes":    files.DefaultMaxBytes,
 		},
 		"see_also": []string{"bkn guide"},
 	}
@@ -168,7 +181,14 @@ func printHelp() {
     bkn auth can <user> <org> <owner|admin|member>
     bkn auth sessions <user> | revoke <user> | memberships <user>
 
-  script  sandboxed JavaScript over store, kv and auth
+  files   namespaced blob storage, local or S3
+    bkn files ns create <name> [--backend local|s3] [--allow-type image/*] [--public]
+    bkn files ns list | delete <name>
+    bkn files put <ns> <path> [--name N] [--overwrite]
+    bkn files get <ns> <name> [--out <path>]
+    bkn files show <ns> <name> | list <ns> | delete <ns> <name>
+
+  script  sandboxed JavaScript over store, kv, auth and files
     bkn script create <name> --file <path> [--allow-net hosts] [--timeout MS]
     bkn script test --file <path> [--input <json>]
     bkn script run <name> [--input <json>]

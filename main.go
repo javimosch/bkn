@@ -55,6 +55,8 @@ func main() {
 		cmdScript(rest)
 	case "auth":
 		cmdAuth(rest)
+	case "files":
+		cmdFiles(rest)
 	case "serve":
 		cmdServe(rest)
 	case "daemon":

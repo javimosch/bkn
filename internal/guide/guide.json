@@ -1,10 +1,10 @@
 {
-  "bkn": "A single-binary backend core: namespaced document collections, typed settings, identity, and sandboxed scripts over embedded SQLite, driven entirely from the CLI.",
+  "bkn": "A single-binary backend core: namespaced document collections, typed settings, identity, file storage, and sandboxed scripts over embedded SQLite, driven entirely from the CLI.",
   "one_liner": "bkn gives a project the two primitives every backend re-invents - a place to put documents and a place to put settings - as one static binary with no database server, no runtime, and no admin UI. Every capability is a CLI verb first and an HTTP route second.",
   "model": {
     "single binary": "The tool is the server, the client and the migration runner. There is nothing else to install and no container to build.",
     "single writer": "bkn owns its SQLite file. Consumers reach it through the CLI or the HTTP API, never by opening the database themselves. This is the rule that keeps the data model changeable.",
-    "two primitives": "store holds documents in namespaced collections; kv holds typed settings; auth holds users, organizations and tokens; script runs sandboxed JavaScript over all of them. Features are built on top of these, not added beside them.",
+    "two primitives": "store holds documents; kv holds typed settings; auth holds users, organizations and tokens; files holds blobs; script runs sandboxed JavaScript over all of them. Features are built on top of these, not added beside them.",
     "namespaces": "Every collection is addressed as <namespace>/<collection>. The namespace is the owning app, so two apps never collide and no caller has to guess a table name.",
     "cli is the api": "Any verb available over HTTP is available as a subcommand with the same shape. Agents drive the CLI; browsers and services drive the HTTP routes.",
     "scripts are userland": "Anything that is a scheduled HTTP call, a transform over stored records, or a webhook handler is a script, not a core feature. This is what keeps the core small enough to change.",
@@ -18,6 +18,7 @@
     "bkn kv set myapp.stripe_key sk_live_... --type encrypted - store a secret sealed with the active key",
     "bkn script test --file draft.js --input '{}' - try a script before storing it",
     "bkn script create digest --file draft.js - store it, then run it by name or over HTTP",
+    "bkn files put assets ./logo.png - store a blob; bkn files get assets logo.png reads it back",
     "bkn serve - expose the same primitives over HTTP when a service needs them",
     "bkn daemon start - background that server and poll it healthy"
   ],
@@ -36,7 +37,9 @@
     "user": "A global identity with an email (always normalized), a bcrypt password hash, and a platform role of user or admin. The platform role governs the deployment, not any tenant.",
     "organization": "A tenant, addressed by slug. Users join one through a membership that carries an org role: owner > admin > member.",
     "access token": "A short-lived (15m) HS256 JWT carrying sub, email, role, org and org_role. It cannot be revoked, which is why it is short - use 'auth me' to resolve it against the live user record.",
-    "refresh token": "A long-lived (30d) opaque token, stored only as a digest and single-use: every refresh rotates it. Revocable via 'auth logout' or 'auth revoke'."
+    "refresh token": "A long-lived (30d) opaque token, stored only as a digest and single-use: every refresh rotates it. Revocable via 'auth logout' or 'auth revoke'.",
+    "file namespace": "A storage bucket with its own backend (local or s3), per-file size cap, allowed content types, and a public flag that decides whether its files are served over HTTP without auth.",
+    "content addressing": "File bytes are stored under their SHA-256, never under the caller's filename. Identical uploads deduplicate, the hash is the ETag, and no user-supplied name ever reaches the filesystem."
   },
   "commands": {
     "store": [
@@ -99,6 +102,16 @@
       "bkn auth member add <org> <user> [--role owner|admin|member]",
       "bkn auth member remove <org> <user>",
       "bkn auth member list <org>"
+    ],
+    "files": [
+      "bkn files ns create <name> [--backend local|s3] [--max-bytes <n>] [--allow-type <type>] [--public]",
+      "bkn files ns list",
+      "bkn files ns delete <name>",
+      "bkn files put <namespace> <path> [--name <n>] [--content-type <t>] [--meta <json>] [--overwrite]",
+      "bkn files get <namespace> <name> [--out <path>]",
+      "bkn files show <namespace> <name>",
+      "bkn files list <namespace> [--limit <n>] [--offset <n>]",
+      "bkn files delete <namespace> <name>"
     ]
   },
   "examples": [
@@ -173,6 +186,25 @@
         "bkn store find billing/subjects --where stripe_customer_id=cus_x",
         "# a Stripe webhook handler is a script, not a core feature"
       ]
+    },
+    {
+      "goal": "Serve public images and keep private documents private",
+      "do": [
+        "bkn files ns create avatars --backend local --allow-type 'image/*' --max-bytes 1048576 --public",
+        "bkn files ns create contracts",
+        "bkn files put avatars ./ada.png",
+        "curl -s localhost:7799/v1/files/avatars/ada.png -o ada.png    # no auth needed",
+        "curl -s localhost:7799/v1/files/contracts/nda.pdf             # 404 without the admin token"
+      ]
+    },
+    {
+      "goal": "Put blobs in S3 or MinIO instead of on disk",
+      "do": [
+        "export S3_ENDPOINT=http://localhost:9000 S3_BUCKET=assets",
+        "export S3_ACCESS_KEY_ID=minioadmin S3_SECRET_ACCESS_KEY=minioadmin",
+        "bkn files ns list      # backends_available now includes s3",
+        "bkn files ns create uploads --backend s3"
+      ]
     }
   ],
   "gotchas": [
@@ -198,7 +230,14 @@
     "Changing a password or disabling a user revokes that user's sessions immediately.",
     "The token signing secret is generated on first use and kept in kv (encrypted when a keyring exists). Set BKN_AUTH_SECRET to share one across instances; rotating it invalidates every outstanding access token.",
     "Passwords passed as --password are visible in the process table. Use --password-stdin for anything real.",
-    "Scripts are operator code, not tenant code: bkn.auth.issue can mint a session for any user. Review a script the way you would review core."
+    "Scripts are operator code, not tenant code: bkn.auth.issue can mint a session for any user. Review a script the way you would review core.",
+    "Only a short allow-list of content types is served inline (common images, text/plain, audio, video). Everything else - HTML, SVG, PDF, JavaScript - is served as an attachment with nosniff and a locked-down CSP, because serving an uploaded document inline from the API's own origin is a stored-XSS delivery mechanism.",
+    "A file in a non-public namespace is indistinguishable from one that does not exist unless you are authenticated: both answer 404.",
+    "put refuses to replace an existing name; pass --overwrite when you mean it.",
+    "Two names holding identical bytes share one blob. Deleting one keeps the other readable; the bytes go only when the last reference does.",
+    "The s3 backend appears in 'files ns list' only when S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are set. Declaring a namespace on an unconfigured backend fails immediately rather than at the first upload.",
+    "Blobs live in ~/.bkn/files (override with BKN_FILES_DIR), separate from the database. Back up both, or neither is much use.",
+    "A script may read a file only up to 8 MB in one call; a blob store holds things a JavaScript string should not."
   ],
   "see_also": [
     "bkn help-json",

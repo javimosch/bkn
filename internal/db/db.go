@@ -32,6 +32,32 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS records_ns_coll ON records(ns, coll, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS file_namespaces (
+  name        TEXT PRIMARY KEY,
+  backend     TEXT NOT NULL DEFAULT 'local',
+  max_bytes   INTEGER NOT NULL DEFAULT 0,
+  allow_types TEXT NOT NULL DEFAULT '[]',
+  public      INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS files (
+  id           TEXT PRIMARY KEY,
+  ns           TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  sha256       TEXT NOT NULL,
+  size         INTEGER NOT NULL,
+  content_type TEXT NOT NULL,
+  backend      TEXT NOT NULL,
+  location     TEXT NOT NULL,
+  metadata     TEXT NOT NULL DEFAULT '{}',
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  UNIQUE (ns, name)
+);
+CREATE INDEX IF NOT EXISTS files_ns ON files(ns, created_at DESC);
+CREATE INDEX IF NOT EXISTS files_sha ON files(sha256);
+
 CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,
   email         TEXT NOT NULL UNIQUE,

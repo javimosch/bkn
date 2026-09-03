@@ -77,6 +77,44 @@ bkn store put billing/subjects --id <user-id> \
   --data '{"plan":"pro","status":"active","stripe_customer_id":"cus_x"}'
 ```
 
+## Files
+
+Namespaced blob storage. A namespace declares its backend (`local` or `s3`),
+a per-file size cap, the content types it accepts, and whether its files are
+served over HTTP without auth.
+
+```sh
+bkn files ns create avatars --allow-type 'image/*' --max-bytes 1048576 --public
+bkn files put avatars ./ada.png
+curl -s localhost:7799/v1/files/avatars/ada.png -o ada.png   # no auth
+```
+
+Bytes are stored under their **SHA-256, never under the caller's filename**.
+That is not a flourish: it means no user-supplied name ever reaches the
+filesystem, so directory traversal is impossible by construction rather than by
+validation. Identical uploads deduplicate, and the hash doubles as the ETag.
+Two names sharing one blob are reference-counted — deleting one keeps the other
+readable.
+
+Serving user uploads inline from the API's own origin is a stored-XSS delivery
+mechanism, so only a short allow-list of types is served inline (common images,
+`text/plain`, audio, video). HTML, **SVG**, PDF and JavaScript are served as
+attachments with `X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: default-src 'none'; sandbox`. A file in a non-public
+namespace answers 404 to an unauthenticated caller, exactly like one that does
+not exist.
+
+The `s3` backend speaks the S3 REST API directly with hand-rolled SigV4 — no
+SDK, because object storage needs three verbs and one signing algorithm, and
+the official client pulls in a dependency tree larger than this program. It is
+verified against a live MinIO in the test suite:
+
+```sh
+docker run -d --rm -p 9123:9000 -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin quay.io/minio/minio server /data
+BKN_S3_TEST_ENDPOINT=http://127.0.0.1:9123 go test ./internal/files/
+```
+
 ## Scripts are the escape hatch
 
 Most of those 40 domains were a scheduled HTTP call, a transform over stored
@@ -92,8 +130,8 @@ function main(input) {
 ```
 
 A script must define `main(input)`; its return value is the run's result. It
-gets `bkn.store`, `bkn.kv`, `bkn.auth`, `bkn.http.fetch`, `console.log`,
-`bkn.id()` and `bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
+gets `bkn.store`, `bkn.kv`, `bkn.auth`, `bkn.files`, `bkn.http.fetch`,
+`console.log`, `bkn.id()` and `bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
 `require`, and no network beyond its own `allow_net` list. Every run is bounded
 by `timeout_ms` and recorded with its status, logs, result and duration.
 
@@ -131,6 +169,8 @@ Built to the agent-first CLI spec family — <https://cli-specs.intrane.fr>.
 | `BKN_DATA` | datastore path (default `~/.bkn/bkn.db`) |
 | `BKN_HOST` / `BKN_PORT` | serve bind defaults (`127.0.0.1` / `7799`); flags win |
 | `BKN_ADMIN_TOKEN` | bearer token gating every non-public HTTP route; **required** to bind off-loopback |
+| `BKN_FILES_DIR` | where local blobs live (default `~/.bkn/files`) |
+| `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | enable the `s3` backend; `BKN_S3_*` also accepted |
 | `BKN_AUTH_SECRET` | token signing secret; generated and stored in `kv` if unset |
 | `BKN_SCRIPT_ALLOW_PRIVATE_NET` | `1` lets scripts reach loopback and private addresses |
 | `BKN_ENCRYPTION_KEY` | single key, hex-64 / base64-32 / 32 literal chars; stamped as keyId `v1` |
@@ -155,6 +195,6 @@ the rest.
 
 ## Status
 
-Scaffold. `store`, `kv`, `script` and `auth` are complete and tested; `files`,
+Scaffold. `store`, `kv`, `script`, `auth` and `files` are complete and tested;
 `events` and `cron` are the remaining core primitives, after which the old
 system's domains get ported as scripts.

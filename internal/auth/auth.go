@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -108,20 +109,36 @@ type Tokens struct {
 
 // Auth owns identity storage and token issuance.
 type Auth struct {
-	db     *sql.DB
-	kv     *kv.KV
+	db *sql.DB
+	kv *kv.KV
+
+	mu     sync.Mutex
 	secret []byte
 }
 
-// New builds an Auth, resolving the token signing secret.
+// New builds an Auth.
+//
+// The signing secret is resolved lazily, on the first operation that needs it.
+// Resolving it here would mean every unrelated command - running a script,
+// listing files - provisions and stores a credential it never uses, and prints
+// a warning about it.
 func New(db *sql.DB, k *kv.KV) (*Auth, error) {
-	a := &Auth{db: db, kv: k}
+	return &Auth{db: db, kv: k}, nil
+}
+
+// signingKey returns the token signing secret, generating it on first use.
+func (a *Auth) signingKey() ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.secret != nil {
+		return a.secret, nil
+	}
 	secret, err := a.resolveSecret()
 	if err != nil {
 		return nil, err
 	}
 	a.secret = secret
-	return a, nil
+	return secret, nil
 }
 
 const secretKey = "auth.jwt_secret"

@@ -209,6 +209,25 @@ Worth noting in the port:
 - `populate` resolves references with one query per referenced model
   (`id:in=...`), not one per record.
 
+## Found by dogfooding these live
+
+Running the suite in [`test/`](../test) against the deployed instance found a
+real defect in `headless.js` that local testing had not: a `PATCH` with no
+`id` fell through to the create path, and because `PATCH` is partial, the
+required-field check was skipped — so a mistyped update silently created a
+record with neither of its two required fields.
+
+Two such records existed on the live server before it was caught. The fix is
+in two parts: `PUT`/`PATCH` without an `id` is now a 400 (an update with
+nothing to update is a client error), and partial validation applies only when
+a record is actually being updated, since there is nothing to fall back to on
+a create.
+
+Worth recording how it surfaced. The suite failed on its *second* run because
+the tests were not re-runnable, and the noise from that nearly buried the real
+signal. Making the suites idempotent is what separated "my test is stateful"
+from "the code accepts invalid writes".
+
 ## Testing them without the real services
 
 Both were developed against local mocks. `bkn hooks test` replays a delivery

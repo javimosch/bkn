@@ -282,11 +282,21 @@ function main(d) {
     const submitted = body(d);
     if (!submitted) return fail(400, "body must be a JSON object");
 
+    // PUT and PATCH address an existing item. Without an id they used to fall
+    // through to the create path, and because PATCH is partial the required
+    // fields were skipped on the way — so a mistyped update silently created
+    // an empty record. An update with nothing to update is a client error.
+    if ((d.method === "PUT" || d.method === "PATCH") && !id) {
+      return fail(400, d.method + " needs ?id=<id>; use POST to create");
+    }
+
     const updating = Boolean(id);
     const previous = updating ? bkn.store.get(collection, id) : null;
     if (updating && !previous) return fail(404, "no such item");
 
-    const checked = validate(model, submitted, d.method === "PATCH");
+    // Partial validation only makes sense against a record that already
+    // satisfies the model. On a create there is nothing to fall back to.
+    const checked = validate(model, submitted, updating && d.method === "PATCH");
     if (checked.error) return checked.error;
 
     const recordId = updating ? id : bkn.id();

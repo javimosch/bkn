@@ -277,9 +277,23 @@ point `BKN_ENCRYPTION_KEY_ID` at it, rotate. Entries sealed by a key that is no
 longer configured are reported rather than skipped, and do not block rotating
 the rest.
 
+## Ported domains
+
+Two features that were whole admin domains in the Node backend now run as
+scripts, with no Go code added for either — see [`examples/`](examples/):
+
+| Domain | Node | bkn |
+|---|---|---|
+| Blog automation | ~2,500 lines, 3 models | 234 lines of JavaScript |
+| Stripe webhook | ~1,500 lines, 2 models | 159 lines of JavaScript |
+
+That is the test the core was built for. Porting them did surface four gaps —
+no crypto in the sandbox, no public inbound route, no atomic conditional write,
+and a binary-unsafe `fetch` — which are now core primitives rather than
+one-off patches.
+
 ## Status
 
-All seven core primitives — `store`, `kv`, `auth`, `files`, `events`, `cron`
-and `script` — are complete and tested. Next is porting the old system's
-domains as scripts, which is the real test of whether the core is the right
-size.
+The core primitives — `store`, `kv`, `auth`, `files`, `events`, `cron`,
+`hooks`, `lock` and `script` — are complete and tested, and two real domains
+have been ported onto them.

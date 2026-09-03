@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "dry_run": false,
+  "publish_immediately": true,
+  "runs_per_day_limit": 2,
+  "provider": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key_setting": "blog.llm_key",
+    "model": "gpt-4o-mini"
+  },
+  "text": { "model": "gpt-4o-mini", "temperature": 0.7, "max_tokens": 3000 },
+  "research": { "model": "gpt-4o-mini", "temperature": 0.2, "max_tokens": 1200 },
+  "images": { "enabled": true, "model": "gpt-4o-mini", "namespace": "blog-images", "prompt_extra": "Flat editorial illustration, muted palette." },
+  "style_guide": "Direct, concrete, no filler. Short paragraphs. British spelling.",
+  "topics": [
+    { "key": "ops", "label": "Running small infrastructure", "weight": 3 },
+    { "key": "tooling", "label": "Developer tooling", "weight": 2 },
+    { "key": "agents", "label": "AI agents in production", "weight": 1 }
+  ]
+}

@@ -20,9 +20,12 @@ primary interface; HTTP mirrors it.
    Before adding a Go feature, write it as a script first; if that works, it
    ships as an example, not as core.
 2. **Six verbs, no more.** The store surface was derived from an audit of real
-   consumers, not from what a database can do. No aggregations, no joins, no
-   server-side sorting. If something needs those, it needs the scripts
-   primitive, not a wider store.
+   consumers, not from what a database can do. The `list` predicate was later
+   widened - six comparison operators, one sort field, a total - because a
+   content API genuinely needs ordering and ranges and doing them in a script
+   means loading the collection into the VM. That is the whole allowance: no
+   `$or`, no regex, no nesting, no joins, no multi-field sort, no aggregation.
+   Anything past it belongs in a script.
 3. **Single writer.** `bkn` owns its SQLite file. Nothing else opens it. The
    previous system's consumers bypassed the API and opened Mongo directly,
    which froze the data model permanently.
@@ -120,6 +123,11 @@ internal/daemon/     start/stop/status over health probing
   test slept 1.1s for a 1s cutoff; whenever the events landed late in their
   second the margin rounded to zero. The sleep must exceed the age by a full
   second.
+- **The id is a column, not a document field.** `splitID` strips it before
+  writing and `decode` merges it back on read, so a filter on `id` has to
+  target the column; going through `json_extract` returns NULL and silently
+  matches nothing. That bug made every attempt to batch-resolve references
+  return raw ids.
 - **Never derive a storage path from a user-supplied name.** Blobs are stored
   under their content hash, which makes traversal structurally impossible
   instead of a validation problem. The name check in `ValidateName` is a

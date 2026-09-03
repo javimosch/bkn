@@ -292,13 +292,15 @@ scripts, with no Go code added for either — see [`examples/`](examples/):
 | Page redirects | service, admin routes, model | 110 lines of JavaScript |
 | Feature flags | service + controller | 138 lines of JavaScript |
 | JSON configs | service + controller + model | 144 lines of JavaScript |
+| Headless CMS | ~780 lines, 2 models | 422 lines of JavaScript |
 
 That is the test the core was built for. Porting them surfaced gaps — no
 crypto in the sandbox, no public inbound route, no atomic conditional write, a
 binary-unsafe `fetch`, then GET hooks, non-JSON responses, CORS and rate
 limiting — every one of which became a general primitive rather than a
-one-off patch. Nothing leaked back into Go, and the last four domains needed
-no core changes at all.
+one-off patch. Four consecutive domains needed no core change at all; the
+headless CMS finally did, and got a bounded query surface rather than a query
+language.
 
 ## Status
 

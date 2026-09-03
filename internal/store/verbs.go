@@ -141,6 +141,30 @@ func (s *Store) whereClause(c Collection, filters []Filter) (string, []any, erro
 	}
 
 	for _, f := range filters {
+		// The id is a column, not a document field: splitID strips it before
+		// writing and decode merges it back on read. A filter on it therefore
+		// has to target the column, or json_extract returns NULL and nothing
+		// ever matches - which silently broke every attempt to batch-resolve
+		// a set of ids.
+		if f.Field == "id" {
+			if f.Op == OpIn {
+				placeholders := make([]string, 0, len(f.Values))
+				for _, v := range f.Values {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+				sb.WriteString(" AND id IN (" + strings.Join(placeholders, ",") + ")")
+				continue
+			}
+			operator, ok := sqlOp[f.Op]
+			if !ok {
+				return "", nil, fmt.Errorf("unsupported operator %q", f.Op)
+			}
+			sb.WriteString(" AND id " + operator + " ?")
+			args = append(args, f.Value)
+			continue
+		}
+
 		path := "$." + f.Field
 		if f.Op == OpIn {
 			placeholders := make([]string, 0, len(f.Values))

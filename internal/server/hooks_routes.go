@@ -66,10 +66,12 @@ func (s *Server) hooksRoutes(mux *http.ServeMux) {
 	// Deliberately unauthenticated: the callers are third parties that
 	// authenticate with a signature header, and the bound script is
 	// responsible for checking it.
-	// GET as well as POST: an export or a form-config endpoint is fetched,
-	// not posted to. The script sees the method and decides.
-	mux.HandleFunc("POST /v1/hooks/{name}", s.hookDeliver)
-	mux.HandleFunc("GET /v1/hooks/{name}", s.hookDeliver)
+	// Every method a script might want to distinguish. A hook delivers an
+	// HTTP request to a script and the script sees d.method, so restricting
+	// the set would only stop it expressing a normal REST surface.
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		mux.HandleFunc(method+" /v1/hooks/{name}", s.hookDeliver)
+	}
 	mux.HandleFunc("OPTIONS /v1/hooks/{name}", s.hookPreflight)
 
 	mux.HandleFunc("GET /v1/hooks", s.guard(s.hookList))
@@ -95,7 +97,7 @@ func (s *Server) hookPreflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeCORS(w, h, origin)
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)

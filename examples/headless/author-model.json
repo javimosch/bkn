@@ -1,0 +1,8 @@
+{
+  "code": "authors",
+  "display_name": "Author",
+  "fields": [
+    { "name": "name", "type": "string", "required": true },
+    { "name": "email", "type": "string", "unique": true }
+  ]
+}

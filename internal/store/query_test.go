@@ -260,3 +260,40 @@ func TestDefaultOrderIsStillRecency(t *testing.T) {
 		t.Errorf("default order = %v, want %v", names(got), want)
 	}
 }
+
+// The id is a column rather than a document field, so a filter on it has to
+// target the column. Without this, json_extract returns NULL and batch
+// resolving a set of ids silently matches nothing.
+func TestFilterByID(t *testing.T) {
+	s := newStore(t)
+	r := seedProducts(t, s)
+
+	one, err := store.ParseFilter("id=widget")
+	if err != nil {
+		t.Fatalf("ParseFilter: %v", err)
+	}
+	got, err := s.List(r, store.ListOptions{Filters: []store.Filter{one}, Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0]["name"] != "widget" {
+		t.Fatalf("id=widget matched %v", names(got))
+	}
+
+	many, err := store.ParseFilter("id:in=widget,gizmo,absent")
+	if err != nil {
+		t.Fatalf("ParseFilter: %v", err)
+	}
+	got, err = s.List(r, store.ListOptions{Filters: []store.Filter{many}, OrderBy: "price", Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if want := []string{"gizmo", "widget"}; !equal(names(got), want) {
+		t.Errorf("id:in matched %v, want %v", names(got), want)
+	}
+
+	total, err := s.Count(r, []store.Filter{many})
+	if err != nil || total != 2 {
+		t.Errorf("Count = %d, %v, want 2", total, err)
+	}
+}

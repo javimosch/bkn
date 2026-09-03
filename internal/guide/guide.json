@@ -47,7 +47,7 @@
     "stream": "An event log namespace: 'errors', 'audit', 'cron', or whatever an app emits into. Created implicitly by the first event.",
     "cron job": "A schedule bound to a script, with optional input. Cron expressions are the usual 5 fields, plus @hourly/@daily/@weekly/@monthly/@yearly and @every <duration>.",
     "tick": "One pass over due jobs. The daemon ticks every 20s while `bkn serve` runs; `bkn cron tick` does the same pass once, for anyone driving the timing from systemd or a real crontab.",
-    "hook": "A public URL (/v1/hooks/<name>) bound to a script, reachable with GET and POST. The script receives the raw body, the lower-cased headers, the query string and the method, and returns {status, body, headers} to shape the reply - including a non-JSON Content-Type for a CSV or a feed. It MUST decide who may write: nothing else does.",
+    "hook": "A public URL (/v1/hooks/<name>) bound to a script, reachable with GET, POST, PUT, PATCH and DELETE. The script receives the raw body, the lower-cased headers, the query string and the method, and returns {status, body, headers} to shape the reply - including a non-JSON Content-Type for a CSV or a feed. It MUST decide who may write: nothing else does.",
     "lock": "An expiring lease held under a key, used to stop two runs of the same work overlapping across processes. acquire returns an owner token, or null when somebody else holds it; only that owner can release or renew.",
     "hook origin": "A hook accepts cross-origin browser requests only from the origins in its allow_origin list; the preflight is refused otherwise. A provider webhook needs none, a form posted from a page needs its site listed.",
     "ordering": "store list sorts by a document field with --order-by <field> or <field>:desc, and by recency when omitted. Records missing the field sort last in both directions."
@@ -374,7 +374,9 @@
     "Sorting is by one document field, ascending unless you write field:desc. There is no multi-field sort: if you need one, sort in a script or store a composite field.",
     "Records that lack the sorted field sort last in both directions, rather than being buried first by SQL's NULL ordering.",
     "Filter values are typed by how they look: price>20 compares numbers, status=true compares a boolean, name=20 compares the number 20 and not the string. Quote nothing - the store decides from the text.",
-    "Without --order-by, records come back newest first, and updated_at has second resolution: writes in the same second are ordered by id. With generated ULIDs that is still creation order; with caller-supplied ids it is alphabetical."
+    "Without --order-by, records come back newest first, and updated_at has second resolution: writes in the same second are ordered by id. With generated ULIDs that is still creation order; with caller-supplied ids it is alphabetical.",
+    "The id is filterable like any other field - `--where id:in=a,b,c` batch-resolves a set of references in one query instead of one get per id.",
+    "A hook receives GET, POST, PUT, PATCH and DELETE; the script branches on d.method. Only OPTIONS is handled for you, as the CORS preflight."
   ],
   "see_also": [
     "bkn help-json",

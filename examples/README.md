@@ -14,6 +14,7 @@ Go code added for either.
 | Page redirects | pageRedirects.service + admin routes + model | [`redirects.js`](redirects/redirects.js), 110 lines |
 | Feature flags | featureFlags.service + controller | [`feature-flags.js`](flags/feature-flags.js), 138 lines |
 | JSON configs | jsonConfigs.service + controller + model | [`configs.js`](configs/configs.js) 67 + [`config-save.js`](configs/config-save.js) 77 lines |
+| Headless CMS | headlessModels.service + 2 controllers + token middleware + 2 models, ~780 lines | [`headless.js`](headless/headless.js) 311 + [`headless-model.js`](headless/headless-model.js) 111 lines |
 
 ## blog-automation
 
@@ -173,6 +174,40 @@ Worth noting in the port:
 - An alias is claimed with `putIfAbsent`, so it can never point at two
   documents at once.
 - A private config answers 404, exactly like a missing one.
+
+## headless
+
+Schema-driven CRUD over user-defined content models — the domain that finally
+pushed back on the core.
+
+```sh
+bkn script run headless-model --input @article-model.json
+bkn script run headless-model --input '{"token":{"name":"website","permissions":{"articles":["read"]}}}'
+bkn hooks create cms --script headless --rate-limit 600
+
+curl -H "X-Api-Token: hl_..." \
+  "https://host/v1/hooks/cms?model=articles&status=live&order_by=published_at&populate=author"
+```
+
+Worth noting in the port:
+
+- **Auto-migration disappears.** Roughly 90 lines of the Node service kept a
+  Mongoose schema in step with a changing model definition. The store is
+  schemaless, so there is nothing to migrate — a new field is simply absent on
+  old records. `headless-model` warns about a changed type or a newly-unique
+  field, which is the part that actually needs a human.
+- Validation lives in the script — type, `required`, `default`, `min`/`max`,
+  `minLength`/`maxLength`, `enum`, regex `match`. Unknown keys are dropped
+  rather than rejected, so adding a field to a client before adding it to the
+  model does not start failing writes.
+- **Uniqueness beyond the id** uses a companion collection whose id is the
+  hashed value, claimed with `putIfAbsent`. The claim is released on rename and
+  on delete, so a freed value becomes available again.
+- API tokens are stored **only as hashes**, and the hash is the record id — so
+  authenticating is one indexed lookup, the plaintext never touches the
+  database, and there is no comparison to leak timing.
+- `populate` resolves references with one query per referenced model
+  (`id:in=...`), not one per record.
 
 ## Testing them without the real services
 

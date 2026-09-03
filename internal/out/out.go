@@ -61,6 +61,14 @@ func Raw(v any) {
 	_ = enc.Encode(v)
 }
 
+// exitHook runs immediately before Fail exits. It exists so a caller can
+// record what happened without every command having to funnel its errors back
+// up through main.
+var exitHook func(code int)
+
+// SetExitHook registers a function to run just before Fail terminates.
+func SetExitHook(fn func(code int)) { exitHook = fn }
+
 // Fail writes a typed error to stderr and exits with the matching code.
 // Recoverable is derived from the code range: only 100-109 are transient.
 // The tool never retries internally (cli-output-spec §3) - the agent decides.
@@ -74,5 +82,8 @@ func Fail(code int, typ, msg string, suggestions ...string) {
 	}
 	b, _ := json.Marshal(map[string]any{"ok": false, "error": e})
 	fmt.Fprintf(os.Stderr, "%s\n", b)
+	if exitHook != nil {
+		exitHook(code)
+	}
 	os.Exit(code)
 }

@@ -68,6 +68,7 @@ cmd_events.go        events subcommands
 cmd_cron.go          cron subcommands
 cmd_hooks.go         hooks subcommands
 cmd_lock.go          lock subcommands
+cmd_lifecycle.go     update, install, uninstall, feedback, telemetry
 wiring.go            shared construction of a fully-equipped script runner
 cmd_server.go        serve + daemon subcommands
 cmd_meta.go          guide, help-json, help
@@ -128,6 +129,17 @@ internal/daemon/     start/stop/status over health probing
   target the column; going through `json_extract` returns NULL and silently
   matches nothing. That bug made every attempt to batch-resolve references
   return raw ids.
+- **You cannot truncate-write a running binary** — Linux returns ETXTBSY.
+  Both `update` and `install` stage beside the target and `rename`, which
+  swaps the directory entry without disturbing the running inode.
+- **A hash check is not enough before a swap.** A truncated publish is
+  self-consistent: the advertised hash was computed over the truncated bytes.
+  The downloaded binary is executed with `version` before it replaces
+  anything.
+- **Telemetry is opt-in here and should stay that way.** bkn holds encrypted
+  kv values, bcrypt hashes and the token signing secret. Adding a field to the
+  payload is a spec-level decision, not a convenience: the allow-list in
+  `internal/telemetry` is the whole contract and a test enumerates it.
 - **Never derive a storage path from a user-supplied name.** Blobs are stored
   under their content hash, which makes traversal structurally impossible
   instead of a validation problem. The name check in `ValidateName` is a

@@ -20,6 +20,7 @@ import (
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/out"
 	"github.com/javimosch/bkn/internal/store"
+	"github.com/javimosch/bkn/internal/update"
 )
 
 // Version is overridden at build time: -ldflags "-X main.Version=1.2.3".
@@ -38,6 +39,12 @@ func main() {
 	}
 
 	cmd, rest := args[0], args[1:]
+
+	// Telemetry is recorded once, after the command has produced its output -
+	// including on the error path, which Fail routes back here.
+	out.SetExitHook(func(code int) { reportTelemetry(cmd, code) })
+	defer func() { reportTelemetry(cmd, 0) }()
+
 	switch cmd {
 	case "version", "--version", "-v":
 		out.Data(map[string]any{"tool": "bkn", "tool_version": Version})
@@ -63,6 +70,18 @@ func main() {
 		cmdCron(rest)
 	case "hooks":
 		cmdHooks(rest)
+	case "update":
+		update.Nudge()
+		cmdUpdate(rest)
+	case "install":
+		cmdInstall(rest)
+	case "uninstall":
+		cmdUninstall(rest)
+	case "feedback":
+		update.Nudge()
+		cmdFeedback(rest)
+	case "telemetry":
+		cmdTelemetry(rest)
 	case "lock":
 		cmdLock(rest)
 	case "serve":

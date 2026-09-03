@@ -132,6 +132,11 @@ func helpJSON() map[string]any {
 			"lock list":          c(none, none),
 			"lock acquire":       c([]string{"key"}, []string{"--ttl <duration>"}),
 			"lock release":       c([]string{"key", "owner"}, []string{"--force"}),
+			"update":             c(none, []string{"--check", "--force"}),
+			"install":            c(none, []string{"--prefix <dir>"}),
+			"uninstall":          c(none, []string{"--prefix <dir>"}),
+			"feedback":           c([]string{"message"}, []string{"--kind <bug|idea|praise|note>", "--context <text>", "--reporter <who>"}),
+			"telemetry":          c(none, []string{"--on", "--off"}),
 			"serve":              c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon start":       c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon stop":        c(none, []string{"--host <h>", "--port <n>"}),
@@ -139,6 +144,7 @@ func helpJSON() map[string]any {
 		},
 		"exit_codes": map[string]string{
 			"0":   "success",
+			"5":   "update available (bkn update --check only)",
 			"80":  "invalid arguments",
 			"82":  "validation error",
 			"85":  "invalid argument value",
@@ -151,6 +157,8 @@ func helpJSON() map[string]any {
 			"BKN_DATA", "BKN_HOST", "BKN_PORT", "BKN_ADMIN_TOKEN",
 			"BKN_ENCRYPTION_KEY", "BKN_ENCRYPTION_KEYS", "BKN_ENCRYPTION_KEY_ID",
 			"BKN_SCRIPT_ALLOW_PRIVATE_NET", "BKN_AUTH_SECRET", "BKN_FILES_DIR",
+			"BKN_HOME", "BKN_SERVER", "BKN_NO_NUDGE", "BKN_RELEASE_DIR",
+			"BKN_TELEMETRY", "BKN_TELEMETRY_URL", "DO_NOT_TRACK", "FEEDBACK_RELAY", "BKN_URL",
 			"S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_FORCE_PATH_STYLE",
 			"SUPERBACKEND_ENCRYPTION_KEY", "SAASBACKEND_ENCRYPTION_KEY",
 		},
@@ -247,6 +255,12 @@ func printHelp() {
   server
     bkn serve [--host 127.0.0.1] [--port 7799]
     bkn daemon start|stop|status
+
+  lifecycle
+    bkn update [--check] [--force]     keep this binary current
+    bkn install [--prefix <dir>]       put it on PATH; uninstall removes it
+    bkn feedback "<message>" [--kind bug|idea|praise|note]
+    bkn telemetry [--on|--off]         opt-in, and prints exactly what it sends
 
   meta
     bkn guide [--human]     the mental model - read this first

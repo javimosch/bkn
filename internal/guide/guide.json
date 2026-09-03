@@ -10,7 +10,8 @@
     "scripts are userland": "Anything that is a scheduled HTTP call, a transform over stored records, or a webhook handler is a script, not a core feature. This is what keeps the core small enough to change.",
     "identity is not billing": "auth carries no subscription, plan or Stripe fields. In the system bkn replaces they lived on the user record, and the missing endpoint to write one is what drove a consumer to bypass the API and write the database directly. Billing belongs in a store collection, managed by a script.",
     "errors, audit and metrics are one thing": "They differ only in which field you care about. An event has a stream, a type, a level, a subject and a JSON body; three separate admin domains collapse into one primitive.",
-    "inbound events": "hooks is the inbound counterpart to bkn.http.fetch. A public URL delivers a third-party event to a script, which verifies the sender's signature itself with bkn.crypto. Without it no signed integration could ever be userland."
+    "inbound events": "hooks is the inbound counterpart to bkn.http.fetch. A public URL delivers a third-party event to a script, which verifies the sender's signature itself with bkn.crypto. Without it no signed integration could ever be userland.",
+    "lifecycle": "bkn keeps itself current and reports on itself: `update` swaps in a newer binary after verifying and running it, `install` puts a binary already in hand onto PATH, `feedback` reaches the operator, and `telemetry` counts verbs - opt-in, because this tool holds secrets."
   },
   "loop": [
     "bkn guide - read this, once, to learn the model",
@@ -50,7 +51,8 @@
     "hook": "A public URL (/v1/hooks/<name>) bound to a script, reachable with GET, POST, PUT, PATCH and DELETE. The script receives the raw body, the lower-cased headers, the query string and the method, and returns {status, body, headers} to shape the reply - including a non-JSON Content-Type for a CSV or a feed. It MUST decide who may write: nothing else does.",
     "lock": "An expiring lease held under a key, used to stop two runs of the same work overlapping across processes. acquire returns an owner token, or null when somebody else holds it; only that owner can release or renew.",
     "hook origin": "A hook accepts cross-origin browser requests only from the origins in its allow_origin list; the preflight is refused otherwise. A provider webhook needs none, a form posted from a page needs its site listed.",
-    "ordering": "store list sorts by a document field with --order-by <field> or <field>:desc, and by recency when omitted. Records missing the field sort last in both directions."
+    "ordering": "store list sorts by a document field with --order-by <field> or <field>:desc, and by recency when omitted. Records missing the field sort last in both directions.",
+    "content-hash version": "The version is sha256[:12] of the binary itself, so there is no number to bump: identical bytes are the same version and a rebuild that changes nothing triggers no update."
   },
   "commands": {
     "store": [
@@ -152,6 +154,13 @@
       "bkn lock list",
       "bkn lock acquire <key> [--ttl <duration>]",
       "bkn lock release <key> <owner> [--force]"
+    ],
+    "lifecycle": [
+      "bkn update [--check] [--force]",
+      "bkn install [--prefix <dir>]",
+      "bkn uninstall [--prefix <dir>]",
+      "bkn feedback <message> [--kind bug|idea|praise|note] [--context <text>] [--reporter <who>]",
+      "bkn telemetry [--on] [--off]"
     ]
   },
   "examples": [
@@ -319,6 +328,23 @@
         "bkn store list shop/products --where 'status:in=live,archived' --limit 20 --offset 40",
         "# the response carries `total`, the number of matches, alongside `count`, the page size"
       ]
+    },
+    {
+      "goal": "Get a binary you already have onto PATH, then keep it current",
+      "do": [
+        "./bkn install",
+        "bkn update --check    # exit 5 means an update is available",
+        "bkn update            # verifies the hash, runs the new binary, then swaps",
+        "# the previous binary is kept at <path>.bak for a manual rollback"
+      ]
+    },
+    {
+      "goal": "Publish an update for other machines from a running bkn",
+      "do": [
+        "mkdir -p ~/.bkn/release && cp ./bkn ~/.bkn/release/bkn",
+        "bkn serve                       # GET /version and /dl/bkn now describe it",
+        "BKN_SERVER=https://your-host bkn update   # on the other machine"
+      ]
     }
   ],
   "gotchas": [
@@ -376,7 +402,15 @@
     "Filter values are typed by how they look: price>20 compares numbers, status=true compares a boolean, name=20 compares the number 20 and not the string. Quote nothing - the store decides from the text.",
     "Without --order-by, records come back newest first, and updated_at has second resolution: writes in the same second are ordered by id. With generated ULIDs that is still creation order; with caller-supplied ids it is alphabetical.",
     "The id is filterable like any other field - `--where id:in=a,b,c` batch-resolves a set of references in one query instead of one get per id.",
-    "A hook receives GET, POST, PUT, PATCH and DELETE; the script branches on d.method. Only OPTIONS is handled for you, as the CORS preflight."
+    "A hook receives GET, POST, PUT, PATCH and DELETE; the script branches on d.method. Only OPTIONS is handled for you, as the CORS preflight.",
+    "bkn update --check exits 5 when an update exists. That is an answer, not a failure - a shell can branch on it without parsing anything.",
+    "An update verifies the hash AND runs the downloaded binary before swapping. A truncated publish can still match its own hash, so running it is the only check that catches one.",
+    "The previous binary is kept at <path>.bak and never deleted, so a rollback is a single mv.",
+    "install COPIES the running binary rather than moving or linking it, so the file you ran it from can be deleted afterwards. It never edits your shell configuration - if the prefix is not on PATH it says so and leaves it to you.",
+    "Telemetry is opt-IN here, not opt-out: bkn holds encrypted secrets, password hashes and token signing keys, and the spec asks such tools for the stricter default. Nothing is sent until `bkn telemetry --on`.",
+    "`bkn telemetry` prints the exact payload that would be sent, and BKN_TELEMETRY_URL points it somewhere else - so what it sends can be observed without letting it send.",
+    "`bkn feedback` never fails the caller. If neither the app endpoint nor the relay is reachable it says so on stderr and still exits 0, because losing a bug report to a failed bug report is the worst outcome.",
+    "Both feedback writes carry the same id, so a retry is stored once. FEEDBACK_RELAY=off keeps submissions local."
   ],
   "see_also": [
     "bkn help-json",

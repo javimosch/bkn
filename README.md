@@ -242,9 +242,9 @@ Built to the agent-first CLI spec family — <https://cli-specs.intrane.fr>.
 | cli-output-spec | stdout = data, stderr = context, exit codes 0/80–119, typed errors with `recoverable` + `suggestions`, `help-json`, no internal retries |
 | cli-guide-spec | `bkn guide` (embedded, `--human` markdown), `GET /guide`, `GET /llms.txt` |
 | cli-daemon-spec | `bkn serve --host --port` (loopback default), `GET /_health`, `POST /_shutdown` (token-gated off-loopback), `bkn daemon start\|stop\|status` (idempotent, health-probed) |
-| cli-update-spec | not yet |
-| cli-feedback-spec | not yet |
-| cli-telemetry-spec | not yet |
+| cli-update-spec | `bkn update [--check] [--force]` — content-hash versions, verify + smoke-test before an atomic swap, `.bak` kept; `bkn install`/`uninstall` (§6); throttled passive nudge; `GET /version` + `/dl/bkn` when serving |
+| cli-feedback-spec | `bkn feedback` — dual-write to the app endpoint and the relay under one id, never fails the caller; `POST /v1/feedback` open, capped, rate-limited, idempotent |
+| cli-telemetry-spec | `bkn telemetry [--on\|--off]` — **opt-in**, allow-listed payload, disclosed before the first send, honours `DO_NOT_TRACK` and CI |
 
 ## Environment
 
@@ -301,6 +301,47 @@ limiting — every one of which became a general primitive rather than a
 one-off patch. Four consecutive domains needed no core change at all; the
 headless CMS finally did, and got a bounded query surface rather than a query
 language.
+
+## Keeping itself current
+
+The version is `sha256[:12]` of the binary, so nothing needs bumping — identical
+bytes are the same version.
+
+```sh
+./bkn install                 # copies the binary you have onto ~/.local/bin
+bkn update --check            # exit 5 means an update exists
+bkn update                    # verify hash -> run it -> swap -> keep .bak
+```
+
+The download is verified **and executed** before it replaces anything: a
+truncated publish can still match its own hash, and running it is the only
+check that catches that. The previous binary stays at `<path>.bak`, so a
+rollback is one `mv`.
+
+A running `bkn serve` publishes updates for other machines from
+`BKN_RELEASE_DIR`, via `GET /version` and `/dl/bkn`.
+
+## Feedback and telemetry
+
+`bkn feedback "..."` dual-writes to this instance and to a central relay under
+one id, so a retry is stored once. It **never fails the caller** — losing a bug
+report because reporting it failed is the worst outcome — and
+`FEEDBACK_RELAY=off` keeps submissions local.
+
+Telemetry is **opt-in**, not opt-out. The spec permits either and asks for
+opt-in from tools handling credentials; bkn holds encrypted secrets, password
+hashes and token signing keys, so nothing is sent until `bkn telemetry --on`.
+`bkn telemetry` prints the exact payload it would send, and
+`BKN_TELEMETRY_URL` redirects it — so what it sends can be observed without
+letting it send.
+
+```
+$ bkn telemetry
+enabled: False | reason: not enabled; bkn is opt-in (bkn telemetry --on)
+payload: {tool, version, event, verb, os, arch, exit_class, ts}
+```
+
+`install_id` is omitted entirely, which the spec calls the safer default.
 
 ## Status
 

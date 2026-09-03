@@ -24,13 +24,15 @@ type Runner struct {
 	auth   *auth.Auth
 	files  *files.Store
 	events *events.Log
+	locks  *store.Locks
 }
 
 // NewRunner builds a runner. The optional dependencies may be nil, in which
 // case scripts simply have no bkn.auth, bkn.files or bkn.events namespace
 // rather than a broken one.
 func NewRunner(reg *Registry, st *store.Store, k *kv.KV, a *auth.Auth, f *files.Store, e *events.Log) *Runner {
-	return &Runner{reg: reg, st: st, kv: k, auth: a, files: f, events: e}
+	db := reg.db
+	return &Runner{reg: reg, st: st, kv: k, auth: a, files: f, events: e, locks: store.NewLocks(db)}
 }
 
 // Result is the outcome of one execution.

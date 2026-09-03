@@ -61,6 +61,10 @@ func main() {
 		cmdEvents(rest)
 	case "cron":
 		cmdCron(rest)
+	case "hooks":
+		cmdHooks(rest)
+	case "lock":
+		cmdLock(rest)
 	case "serve":
 		cmdServe(rest)
 	case "daemon":

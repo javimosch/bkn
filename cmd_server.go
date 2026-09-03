@@ -9,6 +9,7 @@ import (
 	"github.com/javimosch/bkn/internal/daemon"
 	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
+	"github.com/javimosch/bkn/internal/hooks"
 	"github.com/javimosch/bkn/internal/out"
 	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/server"
@@ -45,6 +46,7 @@ func cmdServe(args []string) {
 	fileStore := files.New(conn, files.NewLocal(""), s3OrNil())
 	eventLog := events.New(conn)
 	cronReg := cron.NewRegistry(conn)
+	hookReg := hooks.NewRegistry(conn)
 	a, err := authFor(conn, k)
 	if err != nil {
 		failAuth(err)
@@ -54,6 +56,7 @@ func cmdServe(args []string) {
 		server.Config{Host: *host, Port: *port, Version: Version},
 		st, k, reg, runner, a, fileStore, eventLog, cronReg,
 		cron.NewScheduler(cronReg, runner, eventLog),
+		hookReg, hooks.NewDispatcher(hookReg, runner, eventLog),
 	)
 	if err != nil {
 		out.Fail(out.InvalidValue, "unsafe_bind", err.Error(),

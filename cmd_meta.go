@@ -62,7 +62,7 @@ func helpJSON() map[string]any {
 			"help-json":          c(none, none),
 			"guide":              c(none, []string{"--human"}),
 			"store create":       c([]string{"ref"}, []string{"--normalize <field=rule>"}),
-			"store put":          c([]string{"ref"}, []string{"--data <json|@file|->", "--id <id>"}),
+			"store put":          c([]string{"ref"}, []string{"--data <json|@file|->", "--id <id>", "--if-absent"}),
 			"store get":          c([]string{"ref", "id"}, none),
 			"store find":         c([]string{"ref"}, []string{"--where <field=value>"}),
 			"store list":         c([]string{"ref"}, []string{"--where <field=value>", "--limit <n>", "--offset <n>"}),
@@ -123,6 +123,15 @@ func helpJSON() map[string]any {
 			"cron delete":        c([]string{"name"}, none),
 			"cron run":           c([]string{"name"}, none),
 			"cron tick":          c(none, none),
+			"hooks create":       c([]string{"name"}, []string{"--script <s>", "--max-bytes <n>"}),
+			"hooks list":         c(none, none),
+			"hooks show":         c([]string{"name"}, none),
+			"hooks update":       c([]string{"name"}, []string{"--script <s>", "--max-bytes <n>", "--enable", "--disable"}),
+			"hooks delete":       c([]string{"name"}, none),
+			"hooks test":         c([]string{"name"}, []string{"--body <raw|@file|->", "--header <name=value>"}),
+			"lock list":          c(none, none),
+			"lock acquire":       c([]string{"key"}, []string{"--ttl <duration>"}),
+			"lock release":       c([]string{"key", "owner"}, []string{"--force"}),
 			"serve":              c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon start":       c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon stop":        c(none, []string{"--host <h>", "--port <n>"}),
@@ -205,6 +214,14 @@ func printHelp() {
     bkn files put <ns> <path> [--name N] [--overwrite]
     bkn files get <ns> <name> [--out <path>]
     bkn files show <ns> <name> | list <ns> | delete <ns> <name>
+
+  hooks   public webhook endpoints dispatched to scripts
+    bkn hooks create <name> --script <script>
+    bkn hooks list | show <name> | delete <name>
+    bkn hooks test <name> --body @payload.json --header sig=...
+
+  lock    expiring leases for work that must not overlap
+    bkn lock list | acquire <key> --ttl 15m | release <key> <owner>
 
   events  append-only log: errors, audit trails, counters
     bkn events emit <stream> <type> [--level L] [--subject S] [--data <json>]

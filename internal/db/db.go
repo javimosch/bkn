@@ -32,6 +32,22 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS records_ns_coll ON records(ns, coll, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS locks (
+  key        TEXT PRIMARY KEY,
+  owner      TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  acquired_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS hooks (
+  name       TEXT PRIMARY KEY,
+  script     TEXT NOT NULL,
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  max_bytes  INTEGER NOT NULL DEFAULT 1048576,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id         TEXT PRIMARY KEY,
   ns         TEXT NOT NULL,

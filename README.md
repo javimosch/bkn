@@ -151,6 +151,53 @@ performs exactly the same pass once, for anyone who would rather drive the
 timing from systemd or a real crontab. Overlapping runs are skipped rather than
 queued, and every run is recorded in the `cron` event stream.
 
+## Hooks — the inbound counterpart
+
+`bkn.http.fetch` lets a script call out. `hooks` lets the world call in.
+
+```sh
+bkn hooks create stripe --script stripe-webhook
+# -> /v1/hooks/stripe   PUBLIC and unauthenticated
+```
+
+This route is deliberately public, because providers authenticate with a
+signature header rather than a bearer token. Without it, no signed integration
+could ever be a script and every one of them would have to be Go code — which
+is the thing the sandbox exists to avoid.
+
+The script receives the body **byte-for-byte**, the lower-cased headers and the
+query string, and returns `{status, body, headers}` to shape the reply. It is
+the only thing between the internet and your data, so it must verify the
+signature — `bkn.crypto` exists for that:
+
+```js
+const expected = bkn.crypto.hmac(secret, parts.t + "." + d.body);
+if (!bkn.crypto.equal(expected, parts.v1)) return { status: 400, body: { error: "bad signature" } };
+```
+
+`bkn.crypto.equal` is constant-time; `===` leaks the correct prefix through
+timing. Digests are verified against Node's `crypto` in the test suite, since
+that is what the providers document against.
+
+A script that throws answers 500 so the provider retries, rather than silently
+swallowing a delivery.
+
+## Locks
+
+An expiring lease for work that must not overlap across processes — the
+scheduler's in-process guard says nothing about a CLI `cron tick` racing the
+daemon, or two deployments sharing a database.
+
+```js
+const lock = bkn.lock.acquire("blog-automation", 900);
+if (!lock) return { skipped: "already running" };
+try { /* … */ } finally { bkn.lock.release(lock.key, lock.owner); }
+```
+
+Acquisition is a single conditional statement, so a read-then-write race cannot
+produce two holders; there is a test that runs 24 goroutines at one key and
+asserts exactly one wins.
+
 ## Scripts are the escape hatch
 
 Most of those 40 domains were a scheduled HTTP call, a transform over stored
@@ -166,8 +213,9 @@ function main(input) {
 ```
 
 A script must define `main(input)`; its return value is the run's result. It
-gets `bkn.store`, `bkn.kv`, `bkn.auth`, `bkn.files`, `bkn.events`,
-`bkn.http.fetch`, `console.log`, `bkn.id()` and `bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
+gets `bkn.store`, `bkn.kv`, `bkn.auth`, `bkn.files`, `bkn.events`, `bkn.lock`,
+`bkn.crypto`, `bkn.http.fetch`, `console.log`, `bkn.id()` and `bkn.now()` —
+and nothing else. No filesystem, no processes, no timers, no
 `require`, and no network beyond its own `allow_net` list. Every run is bounded
 by `timeout_ms` and recorded with its status, logs, result and duration.
 

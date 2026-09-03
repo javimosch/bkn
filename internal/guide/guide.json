@@ -9,7 +9,8 @@
     "cli is the api": "Any verb available over HTTP is available as a subcommand with the same shape. Agents drive the CLI; browsers and services drive the HTTP routes.",
     "scripts are userland": "Anything that is a scheduled HTTP call, a transform over stored records, or a webhook handler is a script, not a core feature. This is what keeps the core small enough to change.",
     "identity is not billing": "auth carries no subscription, plan or Stripe fields. In the system bkn replaces they lived on the user record, and the missing endpoint to write one is what drove a consumer to bypass the API and write the database directly. Billing belongs in a store collection, managed by a script.",
-    "errors, audit and metrics are one thing": "They differ only in which field you care about. An event has a stream, a type, a level, a subject and a JSON body; three separate admin domains collapse into one primitive."
+    "errors, audit and metrics are one thing": "They differ only in which field you care about. An event has a stream, a type, a level, a subject and a JSON body; three separate admin domains collapse into one primitive.",
+    "inbound events": "hooks is the inbound counterpart to bkn.http.fetch. A public URL delivers a third-party event to a script, which verifies the sender's signature itself with bkn.crypto. Without it no signed integration could ever be userland."
   },
   "loop": [
     "bkn guide - read this, once, to learn the model",
@@ -45,12 +46,15 @@
     "content addressing": "File bytes are stored under their SHA-256, never under the caller's filename. Identical uploads deduplicate, the hash is the ETag, and no user-supplied name ever reaches the filesystem.",
     "stream": "An event log namespace: 'errors', 'audit', 'cron', or whatever an app emits into. Created implicitly by the first event.",
     "cron job": "A schedule bound to a script, with optional input. Cron expressions are the usual 5 fields, plus @hourly/@daily/@weekly/@monthly/@yearly and @every <duration>.",
-    "tick": "One pass over due jobs. The daemon ticks every 20s while `bkn serve` runs; `bkn cron tick` does the same pass once, for anyone driving the timing from systemd or a real crontab."
+    "tick": "One pass over due jobs. The daemon ticks every 20s while `bkn serve` runs; `bkn cron tick` does the same pass once, for anyone driving the timing from systemd or a real crontab.",
+    "hook": "A public, unauthenticated URL (/v1/hooks/<name>) bound to a script. The script receives the raw body, the lower-cased headers and the query string, and returns {status, body, headers} to shape the reply. It MUST verify the sender's signature - nothing else does.",
+    "lock": "An expiring lease held under a key, used to stop two runs of the same work overlapping across processes. acquire returns an owner token, or null when somebody else holds it; only that owner can release or renew."
   },
   "commands": {
     "store": [
       "bkn store create <ns/coll> [--normalize <field=rule>]",
       "bkn store put <ns/coll> --data <json|@file|-> [--id <id>]",
+      "bkn store put <ns/coll> --data <json|@file|-> --if-absent [--id <id>]",
       "bkn store get <ns/coll> <id>",
       "bkn store find <ns/coll> --where <field=value>",
       "bkn store list <ns/coll> [--where <field=value>] [--limit <n>] [--offset <n>]",
@@ -134,6 +138,19 @@
       "bkn cron delete <name>",
       "bkn cron run <name>",
       "bkn cron tick"
+    ],
+    "hooks": [
+      "bkn hooks create <name> --script <script> [--max-bytes <n>]",
+      "bkn hooks list",
+      "bkn hooks show <name>",
+      "bkn hooks update <name> [--script <s>] [--max-bytes <n>] [--enable|--disable]",
+      "bkn hooks delete <name>",
+      "bkn hooks test <name> --body <raw|@file|-> [--header <name=value>]"
+    ],
+    "lock": [
+      "bkn lock list",
+      "bkn lock acquire <key> [--ttl <duration>]",
+      "bkn lock release <key> <owner> [--force]"
     ]
   },
   "examples": [
@@ -250,6 +267,39 @@
         "bkn cron create nightly-retention --schedule '@daily' --script retention --input '{\"stream\":\"errors\",\"older_than\":\"30d\"}'",
         "bkn daemon start   # nothing fires without a running daemon (or `bkn cron tick`)"
       ]
+    },
+    {
+      "goal": "Receive a signed webhook without any core code",
+      "do": [
+        "cat > stripe.js <<'JS'",
+        "function main(d) {",
+        "  const secret = bkn.kv.get('stripe.webhook_secret');",
+        "  const parts = {}; (d.headers['stripe-signature']||'').split(',').forEach(p => {",
+        "    const [k, v] = p.split('='); parts[k] = v;",
+        "  });",
+        "  const expected = bkn.crypto.hmac(secret, parts.t + '.' + d.body);",
+        "  if (!bkn.crypto.equal(expected, parts.v1 || '')) return { status: 400, body: { error: 'bad signature' } };",
+        "  const evt = JSON.parse(d.body);",
+        "  if (bkn.store.putIfAbsent('stripe/events', { type: evt.type }, evt.id) === null)",
+        "    return { status: 200, body: { ok: true, duplicate: true } };",
+        "  return { status: 200, body: { ok: true } };",
+        "}",
+        "JS",
+        "bkn script create stripe-webhook --file stripe.js",
+        "bkn hooks create stripe --script stripe-webhook",
+        "bkn hooks test stripe --body @sample.json --header stripe-signature=t=1,v1=..."
+      ]
+    },
+    {
+      "goal": "Stop two runs of the same job overlapping across processes",
+      "do": [
+        "# inside a script:",
+        "#   const lock = bkn.lock.acquire('blog-automation', 900);",
+        "#   if (!lock) return { skipped: 'already running' };",
+        "#   try { ... } finally { bkn.lock.release(lock.key, lock.owner); }",
+        "bkn lock list",
+        "bkn lock release blog-automation --force   # operator override"
+      ]
     }
   ],
   "gotchas": [
@@ -290,7 +340,13 @@
     "A job whose schedule stops parsing is disabled and logged as cron.invalid rather than retried forever.",
     "The event log has no automatic retention: it grows until something prunes it. `bkn events prune --older-than 30d` is the tool; a cron job is the usual way to run it.",
     "Event timestamps have second resolution, so ages below a second are not meaningful.",
-    "`events stats --by` accepts only type, level, source and subject. It is the one part of the query that cannot be a bound parameter, so it comes from a fixed set."
+    "`events stats --by` accepts only type, level, source and subject. It is the one part of the query that cannot be a bound parameter, so it comes from a fixed set.",
+    "A hook URL is PUBLIC and unauthenticated - that is the point, since providers sign requests rather than carrying a bearer token. The bound script is the only thing standing between the internet and your data: verify the signature with bkn.crypto.hmac and compare it with bkn.crypto.equal, never with ===.",
+    "A hook script that throws answers 500, so the provider retries. Return {status: 200} explicitly once you have accepted a delivery, even if you decided to ignore it.",
+    "The hook body reaches the script byte-for-byte in `body`, plus `body_base64` for payloads that are not valid UTF-8. Signatures cover exact bytes: never re-serialize before hashing.",
+    "bkn.http.fetch returns text by default and a JavaScript string is UTF-8, so binary responses are corrupted. Pass {responseEncoding:'base64'} for anything that is not text.",
+    "bkn.store.putIfAbsent returns null when the id already existed, which is the idempotency answer a webhook retry needs. A get-then-put has a race that a retry will eventually find.",
+    "A lock is a lease with an expiry, so a crashed holder cannot block the work forever - but a run that outlives its TTL loses the lock while still going. Renew it, or set the TTL above the worst-case run time."
   ],
   "see_also": [
     "bkn help-json",

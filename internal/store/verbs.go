@@ -130,6 +130,44 @@ func (s *Store) Put(r Ref, id string, doc map[string]any) (Record, error) {
 	return decode(id, string(b))
 }
 
+// PutIfAbsent inserts a document only when its id is free, and reports
+// whether it did.
+//
+// This is the idempotency primitive: a webhook that arrives twice with the
+// same provider event id must be processed once, and a get-then-put has a
+// window between the two where a retry slips through.
+func (s *Store) PutIfAbsent(r Ref, id string, doc map[string]any) (Record, bool, error) {
+	if doc == nil {
+		return nil, false, ErrBadDoc
+	}
+	c, err := s.EnsureCollection(r, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	id, doc = splitID(doc, id)
+	if err := applyNormalizers(c.Normalize, doc); err != nil {
+		return nil, false, err
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return nil, false, ErrBadDoc
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.Exec(`
+		INSERT INTO records (ns, coll, id, doc, created_at, updated_at) VALUES (?,?,?,?,?,?)
+		ON CONFLICT(ns, coll, id) DO NOTHING`,
+		r.NS, r.Coll, id, string(b), now, now)
+	if err != nil {
+		return nil, false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		existing, err := s.Get(r, id)
+		return existing, false, err
+	}
+	rec, err := decode(id, string(b))
+	return rec, true, err
+}
+
 // Get returns one document by id.
 func (s *Store) Get(r Ref, id string) (Record, error) {
 	var doc string

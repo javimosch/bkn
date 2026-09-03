@@ -165,9 +165,11 @@ func TestPruneRemovesOldEventsOnly(t *testing.T) {
 		t.Errorf("pruned %d recent events", n)
 	}
 
-	// Timestamps have second resolution, so age the events past a whole
-	// second before asking for anything older than one to be removed.
-	time.Sleep(1100 * time.Millisecond)
+	// Timestamps have second resolution, so the sleep must exceed the age by
+	// a whole second: sleeping only 1.1s for a 1s cutoff leaves a margin that
+	// rounds to zero whenever the events land late in their second, which
+	// made this flaky.
+	time.Sleep(2100 * time.Millisecond)
 	n, err = l.Prune("api", "1s")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)

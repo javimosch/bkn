@@ -52,11 +52,25 @@ func cmdStore(args []string) {
 		fs := flag.NewFlagSet("store put", flag.ExitOnError)
 		data := fs.String("data", "", "JSON object, @file, or - for stdin")
 		id := fs.String("id", "", "caller-supplied record id")
+		ifAbsent := fs.Bool("if-absent", false, "only insert when the id is free")
 		pos := parseFlags(fs, rest)
 		need(pos, 1, "bkn store put <ns/coll> --data <json> [--id <id>]")
 		if *data == "" {
 			out.Fail(out.ValidationError, "missing_data", "--data is required",
 				`bkn store put myapp/users --data '{"email":"a@b.io"}'`)
+		}
+		if *ifAbsent {
+			rec, created, err := st.PutIfAbsent(parseRef(pos[0]), *id, readData(*data))
+			if err != nil {
+				failStore(err)
+			}
+			// The exit code carries the answer, so a shell can branch on
+			// "did I win the race" without parsing anything.
+			if !created {
+				out.Fail(out.Conflict, "already_exists",
+					"a record with that id already exists", "bkn store get "+pos[0]+" "+rec["id"].(string))
+			}
+			out.Data(map[string]any{"record": rec, "created": true})
 		}
 		rec, err := st.Put(parseRef(pos[0]), *id, readData(*data))
 		if err != nil {

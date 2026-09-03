@@ -63,6 +63,9 @@ cmd_auth.go          auth subcommands
 cmd_files.go         files subcommands
 cmd_events.go        events subcommands
 cmd_cron.go          cron subcommands
+cmd_hooks.go         hooks subcommands
+cmd_lock.go          lock subcommands
+wiring.go            shared construction of a fully-equipped script runner
 cmd_server.go        serve + daemon subcommands
 cmd_meta.go          guide, help-json, help
 internal/out/        output contract: envelopes, exit codes, typed errors
@@ -100,6 +103,19 @@ internal/daemon/     start/stop/status over health probing
   GROUP BY column cannot be a bound parameter. It is selected from a fixed map
   and there is a test that feeds it injection strings. Never widen that map to
   arbitrary input.
+- **`/v1/hooks/{name}` is the only public write route, and that is deliberate.**
+  Anything added to `hooksRoutes` is reachable by the internet with no
+  credential. The bound script is the authorization boundary.
+- **Signature comparison must be constant time.** `bkn.crypto.equal` wraps
+  `subtle.ConstantTimeCompare`; a script using `===` leaks the correct prefix.
+- **A JavaScript string is UTF-8.** Handing goja arbitrary bytes replaces every
+  invalid sequence with U+FFFD, silently. `http.fetch` needs
+  `responseEncoding: "base64"` for anything non-text, and hook deliveries carry
+  `body_base64` alongside `body` for the same reason.
+- **Second-resolution timestamps make short-interval tests flaky.** A prune
+  test slept 1.1s for a 1s cutoff; whenever the events landed late in their
+  second the margin rounded to zero. The sleep must exceed the age by a full
+  second.
 - **Never derive a storage path from a user-supplied name.** Blobs are stored
   under their content hash, which makes traversal structurally impossible
   instead of a validation problem. The name check in `ValidateName` is a

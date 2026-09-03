@@ -23,6 +23,7 @@ import (
 	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/guide"
+	"github.com/javimosch/bkn/internal/hooks"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/script"
 	"github.com/javimosch/bkn/internal/store"
@@ -37,20 +38,22 @@ type Config struct {
 
 // Server wires the primitives to HTTP routes.
 type Server struct {
-	cfg       Config
-	st        *store.Store
-	kv        *kv.KV
-	reg       *script.Registry
-	runner    *script.Runner
-	auth      *auth.Auth
-	files     *files.Store
-	events    *events.Log
-	cron      *cron.Registry
-	scheduler *cron.Scheduler
-	throttle  *loginThrottle
-	token     string // shutdown token, non-empty only when bound off-loopback
-	admin     string // BKN_ADMIN_TOKEN, gates every non-public route
-	srv       *http.Server
+	cfg        Config
+	st         *store.Store
+	kv         *kv.KV
+	reg        *script.Registry
+	runner     *script.Runner
+	auth       *auth.Auth
+	files      *files.Store
+	events     *events.Log
+	cron       *cron.Registry
+	scheduler  *cron.Scheduler
+	hooks      *hooks.Registry
+	dispatcher *hooks.Dispatcher
+	throttle   *loginThrottle
+	token      string // shutdown token, non-empty only when bound off-loopback
+	admin      string // BKN_ADMIN_TOKEN, gates every non-public route
+	srv        *http.Server
 }
 
 // IsLoopback reports whether host addresses only the local machine.
@@ -73,10 +76,12 @@ func TokenPath() string {
 
 // New builds a Server, enforcing the bind-safety rules before anything listens.
 func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner, a *auth.Auth, f *files.Store, e *events.Log,
-	cronReg *cron.Registry, scheduler *cron.Scheduler) (*Server, error) {
+	cronReg *cron.Registry, scheduler *cron.Scheduler,
+	hookReg *hooks.Registry, dispatcher *hooks.Dispatcher) (*Server, error) {
 	s := &Server{
 		cfg: cfg, st: st, kv: k, reg: reg, runner: runner, auth: a, files: f,
 		events: e, cron: cronReg, scheduler: scheduler,
+		hooks: hookReg, dispatcher: dispatcher,
 		throttle: newLoginThrottle(), admin: os.Getenv("BKN_ADMIN_TOKEN"),
 	}
 
@@ -189,6 +194,7 @@ func (s *Server) routes() http.Handler {
 	s.authRoutes(mux)
 	s.filesRoutes(mux)
 	s.eventsRoutes(mux)
+	s.hooksRoutes(mux)
 
 	mux.HandleFunc("GET /v1/script", s.guard(s.scriptList))
 	mux.HandleFunc("POST /v1/script/{name}/run", s.guard(s.scriptRun))

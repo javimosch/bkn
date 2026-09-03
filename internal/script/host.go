@@ -2,6 +2,7 @@ package script
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -65,6 +66,18 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 		},
 		"find": func(refStr string, where map[string]any) any {
 			return nilOnNotFound(r.st.Find(ref(refStr), filtersFrom(where)))
+		},
+		"putIfAbsent": func(refStr string, doc map[string]any, id string) any {
+			rec, created, err := r.st.PutIfAbsent(ref(refStr), id, doc)
+			if err != nil {
+				throw(err)
+			}
+			if !created {
+				// null means "already there", which is the answer an
+				// idempotency check is actually asking for.
+				return nil
+			}
+			return map[string]any(rec)
 		},
 		"put": func(refStr string, doc map[string]any, id string) any {
 			rec, err := r.st.Put(ref(refStr), id, doc)
@@ -186,8 +199,39 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 		},
 	}
 
+	lockAPI := map[string]any{
+		"acquire": func(key string, ttlSeconds int) any {
+			if ttlSeconds <= 0 {
+				ttlSeconds = 60
+			}
+			lock, err := r.locks.Acquire(key, time.Duration(ttlSeconds)*time.Second)
+			if errors.Is(err, store.ErrLockHeld) {
+				return nil // somebody else has it; the caller decides what that means
+			}
+			if err != nil {
+				throw(err)
+			}
+			return lock
+		},
+		"release": func(key, owner string) bool {
+			ok, err := r.locks.Release(key, owner)
+			if err != nil {
+				throw(err)
+			}
+			return ok
+		},
+		"renew": func(key, owner string, ttlSeconds int) bool {
+			ok, err := r.locks.Renew(key, owner, time.Duration(ttlSeconds)*time.Second)
+			if err != nil {
+				throw(err)
+			}
+			return ok
+		},
+	}
+
 	api := map[string]any{
 		"store": storeAPI,
+		"lock":  lockAPI,
 		"kv":    kvAPI,
 		"http":  map[string]any{"fetch": r.fetchFunc(vm, s, throw)},
 		"log": func(call goja.FunctionCall) goja.Value {
@@ -198,8 +242,9 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 			logs.WriteString(strings.Join(parts, " ") + "\n")
 			return goja.Undefined()
 		},
-		"id":  func() string { return store.NewID() },
-		"now": func() string { return time.Now().UTC().Format(time.RFC3339) },
+		"crypto": r.newCryptoAPI(throw),
+		"id":     func() string { return store.NewID() },
+		"now":    func() string { return time.Now().UTC().Format(time.RFC3339) },
 	}
 	if authAPI := r.newAuthAPI(throw); authAPI != nil {
 		api["auth"] = authAPI
@@ -230,6 +275,13 @@ func toInt(v any) (int, bool) {
 // The call is synchronous. goja has no event loop, so there are no promises
 // and no async/await; a script that needs three HTTP calls makes them in
 // sequence. That is a real constraint, and it is documented in the guide.
+func encodingName(requested string) string {
+	if requested == "base64" {
+		return "base64"
+	}
+	return "utf8"
+}
+
 func (r *Runner) fetchFunc(vm *goja.Runtime, s Script, throw func(error)) func(string, map[string]any) any {
 	return func(rawURL string, opts map[string]any) any {
 		u, err := url.Parse(rawURL)
@@ -263,7 +315,15 @@ func (r *Runner) fetchFunc(vm *goja.Runtime, s Script, throw func(error)) func(s
 				}
 			}
 			if b, ok := opts["body"]; ok && b != nil {
-				body = strings.NewReader(bodyString(vm, b, headers))
+				raw := bodyString(vm, b, headers)
+				if enc, _ := opts["bodyEncoding"].(string); enc == "base64" {
+					decoded, err := base64.StdEncoding.DecodeString(raw)
+					if err != nil {
+						throw(fmt.Errorf("bodyEncoding is base64 but the body is not: %w", err))
+					}
+					raw = string(decoded)
+				}
+				body = strings.NewReader(raw)
 			}
 			if ms, ok := toInt(opts["timeout_ms"]); ok && ms > 0 {
 				timeout = time.Duration(ms) * time.Millisecond
@@ -304,12 +364,27 @@ func (r *Runner) fetchFunc(vm *goja.Runtime, s Script, throw func(error)) func(s
 		for k := range resp.Header {
 			respHeaders[strings.ToLower(k)] = resp.Header.Get(k)
 		}
+		// A JavaScript string is UTF-8; handing it arbitrary bytes replaces
+		// every invalid sequence with U+FFFD and silently corrupts the
+		// payload. Anything not known to be text must be asked for as base64.
+		responseEncoding, _ := opts["responseEncoding"].(string)
+		bodyOut := string(raw)
+		if responseEncoding == "base64" {
+			bodyOut = base64.StdEncoding.EncodeToString(raw)
+		}
+
 		out := map[string]any{
-			"status":  resp.StatusCode,
-			"ok":      resp.StatusCode >= 200 && resp.StatusCode < 300,
-			"headers": respHeaders,
-			"body":    string(raw),
-			"json":    nil,
+			"status":   resp.StatusCode,
+			"ok":       resp.StatusCode >= 200 && resp.StatusCode < 300,
+			"headers":  respHeaders,
+			"body":     bodyOut,
+			"encoding": encodingName(responseEncoding),
+			"json":     nil,
+		}
+		if responseEncoding == "base64" {
+			// Base64 is not JSON, and pretending otherwise would only produce
+			// a confusing null.
+			return out
 		}
 		if parsed, err := vm.RunString("JSON.parse"); err == nil {
 			if fn, ok := goja.AssertFunction(parsed); ok {

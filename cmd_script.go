@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/javimosch/bkn/internal/auth"
+	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/out"
 	"github.com/javimosch/bkn/internal/script"
@@ -75,7 +76,7 @@ func cmdScript(args []string) {
 	if err != nil {
 		failAuth(err)
 	}
-	runner := script.NewRunner(reg, st, k, a, files.New(conn, files.NewLocal(""), s3OrNil()))
+	runner := script.NewRunner(reg, st, k, a, files.New(conn, files.NewLocal(""), s3OrNil()), events.New(conn))
 
 	switch sub {
 	case "create":

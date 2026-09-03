@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/javimosch/bkn/internal/auth"
+	"github.com/javimosch/bkn/internal/cron"
+	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
@@ -35,17 +37,20 @@ type Config struct {
 
 // Server wires the primitives to HTTP routes.
 type Server struct {
-	cfg      Config
-	st       *store.Store
-	kv       *kv.KV
-	reg      *script.Registry
-	runner   *script.Runner
-	auth     *auth.Auth
-	files    *files.Store
-	throttle *loginThrottle
-	token    string // shutdown token, non-empty only when bound off-loopback
-	admin    string // BKN_ADMIN_TOKEN, gates every non-public route
-	srv      *http.Server
+	cfg       Config
+	st        *store.Store
+	kv        *kv.KV
+	reg       *script.Registry
+	runner    *script.Runner
+	auth      *auth.Auth
+	files     *files.Store
+	events    *events.Log
+	cron      *cron.Registry
+	scheduler *cron.Scheduler
+	throttle  *loginThrottle
+	token     string // shutdown token, non-empty only when bound off-loopback
+	admin     string // BKN_ADMIN_TOKEN, gates every non-public route
+	srv       *http.Server
 }
 
 // IsLoopback reports whether host addresses only the local machine.
@@ -67,9 +72,11 @@ func TokenPath() string {
 }
 
 // New builds a Server, enforcing the bind-safety rules before anything listens.
-func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner, a *auth.Auth, f *files.Store) (*Server, error) {
+func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *script.Runner, a *auth.Auth, f *files.Store, e *events.Log,
+	cronReg *cron.Registry, scheduler *cron.Scheduler) (*Server, error) {
 	s := &Server{
 		cfg: cfg, st: st, kv: k, reg: reg, runner: runner, auth: a, files: f,
+		events: e, cron: cronReg, scheduler: scheduler,
 		throttle: newLoginThrottle(), admin: os.Getenv("BKN_ADMIN_TOKEN"),
 	}
 
@@ -181,6 +188,7 @@ func (s *Server) routes() http.Handler {
 
 	s.authRoutes(mux)
 	s.filesRoutes(mux)
+	s.eventsRoutes(mux)
 
 	mux.HandleFunc("GET /v1/script", s.guard(s.scriptList))
 	mux.HandleFunc("POST /v1/script/{name}/run", s.guard(s.scriptRun))
@@ -466,6 +474,16 @@ func (s *Server) ListenAndServe() error {
 	if s.token != "" {
 		fmt.Fprintf(os.Stderr, "[serve] off-loopback bind: shutdown token at %s\n", TokenPath())
 	}
+	// The scheduler lives for as long as the listener does. Cron jobs fire
+	// only while a daemon is running; `bkn cron tick` covers the case where
+	// something else owns the timing.
+	if s.scheduler != nil {
+		ctx, stop := context.WithCancel(context.Background())
+		defer stop()
+		go s.scheduler.Start(ctx)
+		fmt.Fprintf(os.Stderr, "[serve] cron scheduler ticking every %s\n", cron.TickInterval)
+	}
+
 	err = s.srv.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

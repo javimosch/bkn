@@ -57,6 +57,10 @@ func main() {
 		cmdAuth(rest)
 	case "files":
 		cmdFiles(rest)
+	case "events":
+		cmdEvents(rest)
+	case "cron":
+		cmdCron(rest)
 	case "serve":
 		cmdServe(rest)
 	case "daemon":

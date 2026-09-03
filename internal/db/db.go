@@ -32,6 +32,36 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS records_ns_coll ON records(ns, coll, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS events (
+  id         TEXT PRIMARY KEY,
+  ns         TEXT NOT NULL,
+  type       TEXT NOT NULL,
+  level      TEXT NOT NULL DEFAULT 'info',
+  source     TEXT NOT NULL DEFAULT '',
+  subject    TEXT NOT NULL DEFAULT '',
+  data       TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_ns_time ON events(ns, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS events_ns_type ON events(ns, type, created_at DESC);
+CREATE INDEX IF NOT EXISTS events_ns_level ON events(ns, level, created_at DESC);
+CREATE INDEX IF NOT EXISTS events_subject ON events(ns, subject, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS cron_jobs (
+  name        TEXT PRIMARY KEY,
+  schedule    TEXT NOT NULL,
+  script      TEXT NOT NULL,
+  input       TEXT NOT NULL DEFAULT '{}',
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  next_run_at TEXT NOT NULL DEFAULT '',
+  last_run_at TEXT NOT NULL DEFAULT '',
+  last_status TEXT NOT NULL DEFAULT '',
+  last_run_id TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cron_due ON cron_jobs(enabled, next_run_at);
+
 CREATE TABLE IF NOT EXISTS file_namespaces (
   name        TEXT PRIMARY KEY,
   backend     TEXT NOT NULL DEFAULT 'local',

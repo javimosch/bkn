@@ -7,6 +7,7 @@ import (
 
 	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/db"
+	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/script"
@@ -35,7 +36,7 @@ func newParts(t *testing.T, conn *sql.DB) (*script.Registry, *script.Runner, *st
 	if err != nil {
 		t.Fatalf("auth.New: %v", err)
 	}
-	return reg, script.NewRunner(reg, st, k, a, files.New(conn, files.NewLocal(t.TempDir()))), st
+	return reg, script.NewRunner(reg, st, k, a, files.New(conn, files.NewLocal(t.TempDir())), events.New(conn)), st
 }
 
 func run(t *testing.T, r *script.Runner, code string, input any) script.Result {

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
 	"flag"
 	"strings"
 
 	"github.com/javimosch/bkn/internal/auth"
+	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/out"
 )
 
@@ -51,13 +53,19 @@ func password(inline string, fromStdin bool) string {
 	return inline
 }
 
+// authFor builds an Auth over an open connection. Shared so every command
+// that needs identity constructs it the same way.
+func authFor(conn *sql.DB, k *kv.KV) (*auth.Auth, error) {
+	return auth.New(conn, k)
+}
+
 func cmdAuth(args []string) {
 	need(args, 1, authUsage)
 	sub, rest := args[0], args[1:]
 
 	conn := open()
 	defer conn.Close()
-	a, err := auth.New(conn, newKV(conn))
+	a, err := authFor(conn, newKV(conn))
 	if err != nil {
 		failAuth(err)
 	}

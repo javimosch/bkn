@@ -2,18 +2,19 @@
 
 ## What this is
 
-A single static binary providing five backend primitives — `store` (namespaced
+A single static binary providing seven backend primitives — `store` (namespaced
 document collections), `kv` (typed, optionally encrypted settings), `auth`
 (users, organizations, memberships, tokens), `files` (namespaced blobs, local
-or S3), and `script` (sandboxed JavaScript over all of them) — on embedded
-SQLite. The CLI is the
+or S3), `events` (append-only log), `cron` (scheduled scripts), and `script`
+(sandboxed JavaScript over all of them) — on embedded SQLite. The CLI is the
 primary interface; HTTP mirrors it.
 
 ## The rules that shape the code
 
 1. **Small on purpose.** This replaces an 85k-line Node backend whose feature
    count grew because the core had no escape hatch. Target for the full core
-   (store, kv, script, auth, files, events, cron) is ~8k lines. A new feature
+   (store, kv, auth, files, events, cron, script) was ~8k lines; it landed
+   near that, and the number is a point of attention rather than a gate. A new feature
    is presumed to belong in userland until proven otherwise — and since
    `script` exists, "userland" is now a real answer rather than a deferral.
    Before adding a Go feature, write it as a script first; if that works, it
@@ -60,6 +61,8 @@ cmd_kv.go            kv subcommands
 cmd_script.go        script subcommands
 cmd_auth.go          auth subcommands
 cmd_files.go         files subcommands
+cmd_events.go        events subcommands
+cmd_cron.go          cron subcommands
 cmd_server.go        serve + daemon subcommands
 cmd_meta.go          guide, help-json, help
 internal/out/        output contract: envelopes, exit codes, typed errors
@@ -87,6 +90,16 @@ internal/daemon/     start/stop/status over health probing
 - **`modernc.org/sqlite`, not `mattn/go-sqlite3`.** The latter needs cgo, which
   costs the static single binary. `go.mod` pins a toolchain newer than the
   system Go; `GOTOOLCHAIN=auto` (the default) fetches it.
+- **Do not route a forced state change through a validating update.** The
+  scheduler disabled a job with an unparseable schedule by calling
+  `Registry.Update`, which re-parses the schedule and refuses — so the disable
+  silently failed and the job was retried on every tick forever. There is a
+  dedicated `disable` for exactly this, and a test that catches the
+  regression.
+- **`events stats --by` interpolates a column name into SQL**, because a
+  GROUP BY column cannot be a bound parameter. It is selected from a fixed map
+  and there is a test that feeds it injection strings. Never widen that map to
+  arbitrary input.
 - **Never derive a storage path from a user-supplied name.** Blobs are stored
   under their content hash, which makes traversal structurally impossible
   instead of a validation problem. The name check in `ValidateName` is a

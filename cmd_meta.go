@@ -7,7 +7,9 @@ import (
 	"os"
 
 	"github.com/javimosch/bkn/internal/auth"
+	"github.com/javimosch/bkn/internal/cron"
 	"github.com/javimosch/bkn/internal/db"
+	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/guide"
 	"github.com/javimosch/bkn/internal/kv"
@@ -109,6 +111,18 @@ func helpJSON() map[string]any {
 			"files show":         c([]string{"namespace", "name"}, none),
 			"files list":         c([]string{"namespace"}, []string{"--limit <n>", "--offset <n>"}),
 			"files delete":       c([]string{"namespace", "name"}, none),
+			"events emit":        c([]string{"stream", "type"}, []string{"--level <l>", "--source <s>", "--subject <s>", "--data <json>"}),
+			"events list":        c([]string{"stream"}, []string{"--type <t>", "--level <l>", "--source <s>", "--subject <s>", "--since <age>", "--until <age>", "--limit <n>", "--offset <n>"}),
+			"events stats":       c([]string{"stream"}, []string{"--by <type|level|source|subject>", "--since <age>"}),
+			"events streams":     c(none, none),
+			"events prune":       c(none, []string{"--older-than <age>", "--stream <s>"}),
+			"cron create":        c([]string{"name"}, []string{"--schedule <expr>", "--script <s>", "--input <json>"}),
+			"cron list":          c(none, none),
+			"cron show":          c([]string{"name"}, none),
+			"cron update":        c([]string{"name"}, []string{"--schedule <expr>", "--script <s>", "--input <json>", "--enable", "--disable"}),
+			"cron delete":        c([]string{"name"}, none),
+			"cron run":           c([]string{"name"}, none),
+			"cron tick":          c(none, none),
 			"serve":              c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon start":       c(none, []string{"--host <h>", "--port <n>"}),
 			"daemon stop":        c(none, []string{"--host <h>", "--port <n>"}),
@@ -147,6 +161,10 @@ func helpJSON() map[string]any {
 			"files_dir":         files.DefaultLocalRoot(),
 			"file_backends":     files.Backends(),
 			"file_max_bytes":    files.DefaultMaxBytes,
+			"event_levels":      events.Levels(),
+			"event_group_bys":   events.GroupBys(),
+			"cron_shortcuts":    cron.Shortcuts(),
+			"cron_tick":         cron.TickInterval.String(),
 		},
 		"see_also": []string{"bkn guide"},
 	}
@@ -188,7 +206,19 @@ func printHelp() {
     bkn files get <ns> <name> [--out <path>]
     bkn files show <ns> <name> | list <ns> | delete <ns> <name>
 
-  script  sandboxed JavaScript over store, kv, auth and files
+  events  append-only log: errors, audit trails, counters
+    bkn events emit <stream> <type> [--level L] [--subject S] [--data <json>]
+    bkn events list <stream> [--level L] [--since 24h] [--limit N]
+    bkn events stats <stream> [--by type|level|source|subject]
+    bkn events streams | prune --older-than 30d
+
+  cron    scheduled scripts
+    bkn cron create <name> --schedule "0 3 * * *" --script <script>
+    bkn cron list | show <name> | delete <name>
+    bkn cron update <name> [--schedule S] [--enable|--disable]
+    bkn cron run <name> | tick
+
+  script  sandboxed JavaScript over store, kv, auth, files and events
     bkn script create <name> --file <path> [--allow-net hosts] [--timeout MS]
     bkn script test --file <path> [--input <json>]
     bkn script run <name> [--input <json>]

@@ -10,6 +10,7 @@ import (
 	"github.com/dop251/goja"
 
 	"github.com/javimosch/bkn/internal/auth"
+	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/kv"
 	"github.com/javimosch/bkn/internal/store"
@@ -17,17 +18,19 @@ import (
 
 // Runner executes scripts against the core primitives.
 type Runner struct {
-	reg   *Registry
-	st    *store.Store
-	kv    *kv.KV
-	auth  *auth.Auth
-	files *files.Store
+	reg    *Registry
+	st     *store.Store
+	kv     *kv.KV
+	auth   *auth.Auth
+	files  *files.Store
+	events *events.Log
 }
 
-// NewRunner builds a runner. a and f may be nil, in which case scripts simply
-// have no bkn.auth or bkn.files namespace rather than a broken one.
-func NewRunner(reg *Registry, st *store.Store, k *kv.KV, a *auth.Auth, f *files.Store) *Runner {
-	return &Runner{reg: reg, st: st, kv: k, auth: a, files: f}
+// NewRunner builds a runner. The optional dependencies may be nil, in which
+// case scripts simply have no bkn.auth, bkn.files or bkn.events namespace
+// rather than a broken one.
+func NewRunner(reg *Registry, st *store.Store, k *kv.KV, a *auth.Auth, f *files.Store, e *events.Log) *Runner {
+	return &Runner{reg: reg, st: st, kv: k, auth: a, files: f, events: e}
 }
 
 // Result is the outcome of one execution.

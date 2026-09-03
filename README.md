@@ -115,6 +115,42 @@ docker run -d --rm -p 9123:9000 -e MINIO_ROOT_USER=minioadmin \
 BKN_S3_TEST_ENDPOINT=http://127.0.0.1:9123 go test ./internal/files/
 ```
 
+## Events
+
+One append-only log for what used to be three admin domains. Errors, audit
+trails and counters differ only in which field you care about, so an event has
+a stream, a type, a level, a source, a subject and a JSON body.
+
+```sh
+bkn events emit errors http.500 --level error --source api --subject /v1/orders
+bkn events stats errors --by subject --since 24h
+bkn events list errors --level error --limit 20
+bkn events prune --older-than 30d
+```
+
+There is no automatic retention: the log grows until something prunes it.
+That is deliberate — deletion should be something someone asked for — and
+`prune` on a cron job is the usual way to ask.
+
+## Cron
+
+A schedule bound to a script. The scheduler is thin because `script` already
+runs code safely with a timeout and a run history; it only has to answer "what
+is due".
+
+```sh
+bkn cron create nightly --schedule '@daily' --script retention \
+  --input '{"stream":"errors","older_than":"30d"}'
+bkn cron list
+bkn cron run nightly     # immediately, without consuming the scheduled slot
+```
+
+Standard 5-field expressions plus `@hourly`/`@daily`/`@weekly`/`@monthly`/
+`@yearly` and `@every 5m`. Jobs fire while `bkn serve` runs; `bkn cron tick`
+performs exactly the same pass once, for anyone who would rather drive the
+timing from systemd or a real crontab. Overlapping runs are skipped rather than
+queued, and every run is recorded in the `cron` event stream.
+
 ## Scripts are the escape hatch
 
 Most of those 40 domains were a scheduled HTTP call, a transform over stored
@@ -130,8 +166,8 @@ function main(input) {
 ```
 
 A script must define `main(input)`; its return value is the run's result. It
-gets `bkn.store`, `bkn.kv`, `bkn.auth`, `bkn.files`, `bkn.http.fetch`,
-`console.log`, `bkn.id()` and `bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
+gets `bkn.store`, `bkn.kv`, `bkn.auth`, `bkn.files`, `bkn.events`,
+`bkn.http.fetch`, `console.log`, `bkn.id()` and `bkn.now()` — and nothing else. No filesystem, no processes, no timers, no
 `require`, and no network beyond its own `allow_net` list. Every run is bounded
 by `timeout_ms` and recorded with its status, logs, result and duration.
 
@@ -195,6 +231,7 @@ the rest.
 
 ## Status
 
-Scaffold. `store`, `kv`, `script`, `auth` and `files` are complete and tested;
-`events` and `cron` are the remaining core primitives, after which the old
-system's domains get ported as scripts.
+All seven core primitives — `store`, `kv`, `auth`, `files`, `events`, `cron`
+and `script` — are complete and tested. Next is porting the old system's
+domains as scripts, which is the real test of whether the core is the right
+size.

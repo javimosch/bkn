@@ -5,8 +5,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/javimosch/bkn/internal/auth"
+	"github.com/javimosch/bkn/internal/cron"
 	"github.com/javimosch/bkn/internal/daemon"
+	"github.com/javimosch/bkn/internal/events"
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/out"
 	"github.com/javimosch/bkn/internal/script"
@@ -42,13 +43,17 @@ func cmdServe(args []string) {
 	k := newKV(conn)
 	reg := script.NewRegistry(conn)
 	fileStore := files.New(conn, files.NewLocal(""), s3OrNil())
-	a, err := auth.New(conn, k)
+	eventLog := events.New(conn)
+	cronReg := cron.NewRegistry(conn)
+	a, err := authFor(conn, k)
 	if err != nil {
 		failAuth(err)
 	}
+	runner := script.NewRunner(reg, st, k, a, fileStore, eventLog)
 	srv, err := server.New(
 		server.Config{Host: *host, Port: *port, Version: Version},
-		st, k, reg, script.NewRunner(reg, st, k, a, fileStore), a, fileStore,
+		st, k, reg, runner, a, fileStore, eventLog, cronReg,
+		cron.NewScheduler(cronReg, runner, eventLog),
 	)
 	if err != nil {
 		out.Fail(out.InvalidValue, "unsafe_bind", err.Error(),

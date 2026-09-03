@@ -207,6 +207,9 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 	if filesAPI := r.newFilesAPI(throw); filesAPI != nil {
 		api["files"] = filesAPI
 	}
+	if eventsAPI := r.newEventsAPI(throw); eventsAPI != nil {
+		api["events"] = eventsAPI
+	}
 	return api
 }
 

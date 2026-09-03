@@ -12,6 +12,8 @@ Go code added for either.
 | Waiting-list exports | ~900 lines across two services plus controllers and routes | [`waitlist-export.js`](forms/waitlist-export.js), 120 lines |
 | i18n | i18n.service + i18nInferredKeys.service + 2 controllers + 2 models | [`i18n.js`](i18n/i18n.js) 158 + [`i18n-import.js`](i18n/i18n-import.js) 82 lines |
 | Page redirects | pageRedirects.service + admin routes + model | [`redirects.js`](redirects/redirects.js), 110 lines |
+| Feature flags | featureFlags.service + controller | [`feature-flags.js`](flags/feature-flags.js), 138 lines |
+| JSON configs | jsonConfigs.service + controller + model | [`configs.js`](configs/configs.js) 67 + [`config-save.js`](configs/config-save.js) 77 lines |
 
 ## blog-automation
 
@@ -121,6 +123,56 @@ Worth noting in the port:
   silently loses attribution.
 - A permanent redirect is cached for an hour and a temporary one is not; a miss
   is cached briefly, since a rule can appear at any time.
+
+## feature-flags
+
+Evaluation only — the flags themselves need no storage code, because they are
+`kv` entries and the admin interface is `bkn kv set`:
+
+```sh
+bkn kv set flag.new-checkout --type json \
+  '{"enabled":false,"public":true,"rollout_percentage":30,"payload":{"variant":"b"}}'
+bkn hooks create flags --script feature-flags --rate-limit 300
+```
+
+Worth noting in the port:
+
+- Precedence is deny → allow → on → rollout. **Deny wins over allow**: a kill
+  switch an allow-list can override is not a kill switch.
+- The bucket is `sha256(flag + ":" + subject)`, so it is stable for a subject
+  across restarts and **independent per flag** — otherwise everyone in the
+  first 10% of one rollout is in the first 10% of every rollout. Measured over
+  300 subjects, two 30% flags agreed 54.7% of the time (identical bucketing
+  would be 100%, independent ≈58%).
+- Bucketing prefers the org over the user, which keeps a whole team on the same
+  side of a rollout and makes a partial release demoable.
+- An anonymous caller sees only flags marked `public`; a private flag leaks the
+  shape of unreleased work.
+- An invalid or expired token is treated as an anonymous visitor. A flag check
+  should never be the thing that breaks a page.
+
+## configs
+
+Public JSON documents addressed by slug or by a stable alias.
+
+```sh
+bkn script run config-save --input '{"title":"Pricing Table 2026","value":{...},"public":true,"alias":"pricing"}'
+bkn hooks create configs --script configs --rate-limit 300
+
+curl "https://host/v1/hooks/configs?alias=pricing&raw=1"
+```
+
+Worth noting in the port:
+
+- Roughly half the Node service was a hand-rolled per-slug TTL cache. That is
+  gone: the stored content hash is the **ETag** and the config's own
+  `cache_ttl_seconds` becomes `Cache-Control`, so caching is shared by every
+  client instead of living in one server's memory.
+- The slug **is** the document id, so uniqueness comes from the store rather
+  than from a check a concurrent save could slip past.
+- An alias is claimed with `putIfAbsent`, so it can never point at two
+  documents at once.
+- A private config answers 404, exactly like a missing one.
 
 ## Testing them without the real services
 

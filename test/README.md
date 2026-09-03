@@ -12,6 +12,10 @@ for t in store kv auth files runtime stripe forms cms headless; do
 done
 ```
 
+`BKN_TEST_URL` points the suite at a different deployment. That is the only
+knob: it moves the address, never an assertion — which is what lets the same
+113 checks serve as the acceptance gate for a reimplementation.
+
 `dog.sh` is the shared harness (auth helper, assertion helpers). Each suite
 prints `[N passed, M failed]`.
 

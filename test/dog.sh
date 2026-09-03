@@ -1,6 +1,8 @@
 #!/bin/bash
 # live dogfood harness — every call goes over the public internet to dk1
-B=https://bkn.intrane.fr
+# The target is parameterizable so the same assertions can be run against a
+# different implementation. Only the ADDRESS moves; no assertion changes.
+B=${BKN_TEST_URL:-https://bkn.intrane.fr}
 ADMIN=$(cat "$SP/admin.tok")
 PASS=0; FAIL=0
 a()  { curl -s -H "Authorization: Bearer $ADMIN" "$@"; }

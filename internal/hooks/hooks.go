@@ -13,6 +13,7 @@ package hooks
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -35,13 +36,27 @@ const DefaultMaxBytes = 1 << 20
 
 // Hook binds a public URL path to a script.
 type Hook struct {
-	Name      string `json:"name"`
-	Script    string `json:"script"`
-	Enabled   bool   `json:"enabled"`
-	MaxBytes  int64  `json:"max_bytes"`
-	Path      string `json:"path"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	Name        string   `json:"name"`
+	Script      string   `json:"script"`
+	Enabled     bool     `json:"enabled"`
+	MaxBytes    int64    `json:"max_bytes"`
+	AllowOrigin []string `json:"allow_origin"`
+	RateLimit   int      `json:"rate_limit"`
+	Path        string   `json:"path"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+}
+
+// OriginAllowed reports whether a browser at origin may call this hook.
+// An empty list means no cross-origin access at all, which is the right
+// default for a webhook: only a form posted from a page needs CORS.
+func (h Hook) OriginAllowed(origin string) bool {
+	for _, allowed := range h.AllowOrigin {
+		if allowed == "*" || strings.EqualFold(allowed, origin) {
+			return true
+		}
+	}
+	return false
 }
 
 // Registry stores hook bindings.
@@ -64,13 +79,17 @@ func (r *Registry) Create(h Hook) (Hook, error) {
 	if h.MaxBytes <= 0 {
 		h.MaxBytes = DefaultMaxBytes
 	}
+	if h.AllowOrigin == nil {
+		h.AllowOrigin = []string{}
+	}
 	h.Enabled = true
 	h.CreatedAt, h.UpdatedAt = now(), now()
+	origins, _ := json.Marshal(h.AllowOrigin)
 
 	_, err := r.db.Exec(`
-		INSERT INTO hooks (name, script, enabled, max_bytes, created_at, updated_at)
-		VALUES (?,?,1,?,?,?)`,
-		h.Name, h.Script, h.MaxBytes, h.CreatedAt, h.UpdatedAt)
+		INSERT INTO hooks (name, script, enabled, max_bytes, allow_origin, rate_limit, created_at, updated_at)
+		VALUES (?,?,1,?,?,?,?,?)`,
+		h.Name, h.Script, h.MaxBytes, string(origins), h.RateLimit, h.CreatedAt, h.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return Hook{}, ErrExists
@@ -80,12 +99,14 @@ func (r *Registry) Create(h Hook) (Hook, error) {
 	return withPath(h), nil
 }
 
-const cols = `name, script, enabled, max_bytes, created_at, updated_at`
+const cols = `name, script, enabled, max_bytes, allow_origin, rate_limit, created_at, updated_at`
 
 func scan(row interface{ Scan(...any) error }) (Hook, error) {
 	var h Hook
 	var enabled int
-	err := row.Scan(&h.Name, &h.Script, &enabled, &h.MaxBytes, &h.CreatedAt, &h.UpdatedAt)
+	var origins string
+	err := row.Scan(&h.Name, &h.Script, &enabled, &h.MaxBytes, &origins, &h.RateLimit,
+		&h.CreatedAt, &h.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return Hook{}, ErrNotFound
 	}
@@ -93,6 +114,8 @@ func scan(row interface{ Scan(...any) error }) (Hook, error) {
 		return Hook{}, err
 	}
 	h.Enabled = enabled == 1
+	h.AllowOrigin = []string{}
+	_ = json.Unmarshal([]byte(origins), &h.AllowOrigin)
 	return withPath(h), nil
 }
 
@@ -121,7 +144,8 @@ func (r *Registry) List() ([]Hook, error) {
 }
 
 // Update changes only the fields whose pointers are non-nil.
-func (r *Registry) Update(name string, script *string, maxBytes *int64, enabled *bool) (Hook, error) {
+func (r *Registry) Update(name string, script *string, maxBytes *int64, enabled *bool,
+	allowOrigin *[]string, rateLimit *int) (Hook, error) {
 	h, err := r.Get(name)
 	if err != nil {
 		return Hook{}, err
@@ -135,14 +159,23 @@ func (r *Registry) Update(name string, script *string, maxBytes *int64, enabled 
 	if enabled != nil {
 		h.Enabled = *enabled
 	}
+	if allowOrigin != nil {
+		h.AllowOrigin = *allowOrigin
+	}
+	if rateLimit != nil {
+		h.RateLimit = *rateLimit
+	}
 	h.UpdatedAt = now()
 
 	en := 0
 	if h.Enabled {
 		en = 1
 	}
-	_, err = r.db.Exec(`UPDATE hooks SET script=?, max_bytes=?, enabled=?, updated_at=? WHERE name=?`,
-		h.Script, h.MaxBytes, en, h.UpdatedAt, name)
+	origins, _ := json.Marshal(h.AllowOrigin)
+	_, err = r.db.Exec(`
+		UPDATE hooks SET script=?, max_bytes=?, enabled=?, allow_origin=?, rate_limit=?, updated_at=?
+		WHERE name=?`,
+		h.Script, h.MaxBytes, en, string(origins), h.RateLimit, h.UpdatedAt, name)
 	if err != nil {
 		return Hook{}, err
 	}

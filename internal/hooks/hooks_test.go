@@ -158,7 +158,7 @@ func TestDisabledHookIsRefused(t *testing.T) {
 	h := bind(t, reg, scripts, "off", `function main(){ return 1 }`)
 
 	no := false
-	if _, err := reg.Update("off", nil, nil, &no); err != nil {
+	if _, err := reg.Update("off", nil, nil, &no, nil, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	updated, err := reg.Get("off")

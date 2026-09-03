@@ -1,0 +1,10 @@
+{
+  "title": "Join the waiting list",
+  "enabled": true,
+  "honeypot": "company_url",
+  "dedupe_field": "email",
+  "fields": [
+    { "name": "email", "type": "email", "required": true },
+    { "name": "source", "type": "text", "max": 80 }
+  ]
+}

@@ -103,6 +103,10 @@ internal/daemon/     start/stop/status over health probing
   GROUP BY column cannot be a bound parameter. It is selected from a fixed map
   and there is a test that feeds it injection strings. Never widen that map to
   arbitrary input.
+- **New columns need an explicit `ALTER`.** `CREATE TABLE IF NOT EXISTS` does
+  nothing to a database that already has the table, so a column added later
+  goes in `addedColumns` in `internal/db`, which tolerates "duplicate column
+  name" and fails on anything else.
 - **`/v1/hooks/{name}` is the only public write route, and that is deliberate.**
   Anything added to `hooksRoutes` is reachable by the internet with no
   credential. The bound script is the authorization boundary.

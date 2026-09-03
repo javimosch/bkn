@@ -8,6 +8,8 @@ Go code added for either.
 |---|---|---|
 | Blog automation | ~2,500 lines across services, controllers, routes and 3 Mongoose models | [`blog-automation.js`](blog-automation/blog-automation.js), 234 lines |
 | Stripe webhook | ~1,500 lines across services, controllers, routes and 2 models | [`stripe-webhook.js`](stripe-webhook/stripe-webhook.js), 159 lines |
+| Forms | forms.service + controller + FormSubmission model | [`forms.js`](forms/forms.js), 154 lines |
+| Waiting-list exports | ~900 lines across two services plus controllers and routes | [`waitlist-export.js`](forms/waitlist-export.js), 120 lines |
 
 ## blog-automation
 
@@ -76,3 +78,52 @@ or a provider's retry schedule:
 ```sh
 bkn hooks test stripe --body @sample.json --header "stripe-signature=t=...,v1=..."
 ```
+
+## forms
+
+Public form submissions, with the definition stored as data so a new form needs
+a `store put` rather than a deploy.
+
+```sh
+bkn store put forms/definitions --id waitlist --data @waitlist-form.json
+bkn script create forms --file forms.js
+bkn hooks create forms --script forms \
+  --allow-origin https://your-site.example --rate-limit 10
+```
+
+`GET /v1/hooks/forms?form=waitlist` returns the field list so a page can render
+itself; `POST` validates and stores a submission.
+
+Worth noting in the port:
+
+- A **honeypot** field answers `200` and stores nothing, so a bot believes it
+  succeeded and does not adapt.
+- `dedupe_field` makes "sign me up" idempotent: the address is normalised,
+  hashed into the record id, and written with `putIfAbsent`, so a double
+  submission is one entry decided atomically.
+- Email notification is best-effort — the submission is already stored, and
+  losing it because a mail provider is down would be the worse failure.
+
+## waitlist-export
+
+Password-protected CSV or JSON exports of submissions.
+
+```sh
+bkn kv set exports.waitlist_password "a-long-shared-secret" --type encrypted
+bkn store put forms/exports --id waitlist --data @export-config.json
+bkn hooks create exports --script waitlist-export --rate-limit 30
+
+curl "https://host/v1/hooks/exports?name=waitlist&password=..." -o waitlist.csv
+```
+
+Worth noting in the port:
+
+- The shared secret lives in an **encrypted kv entry**, not as a hash on the
+  config. It is a password to compare, not a user credential to verify, and
+  keeping it out of the database entirely beats hashing it in.
+- CSV quoting follows RFC 4180 and is verified against Python's `csv` module in
+  the walkthrough — a stray comma in a free-text field silently shifts every
+  later column otherwise.
+- The export streams in pages of 500 rather than loading everything at once.
+- Access, granted and denied, lands in the `exports` event stream; no separate
+  access-log collection is needed.

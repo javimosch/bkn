@@ -50,6 +50,7 @@ type Server struct {
 	scheduler  *cron.Scheduler
 	hooks      *hooks.Registry
 	dispatcher *hooks.Dispatcher
+	hookLimit  *hookLimiter
 	throttle   *loginThrottle
 	token      string // shutdown token, non-empty only when bound off-loopback
 	admin      string // BKN_ADMIN_TOKEN, gates every non-public route
@@ -81,7 +82,7 @@ func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *sc
 	s := &Server{
 		cfg: cfg, st: st, kv: k, reg: reg, runner: runner, auth: a, files: f,
 		events: e, cron: cronReg, scheduler: scheduler,
-		hooks: hookReg, dispatcher: dispatcher,
+		hooks: hookReg, dispatcher: dispatcher, hookLimit: newHookLimiter(),
 		throttle: newLoginThrottle(), admin: os.Getenv("BKN_ADMIN_TOKEN"),
 	}
 
@@ -111,6 +112,12 @@ func New(cfg Config, st *store.Store, k *kv.KV, reg *script.Registry, runner *sc
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writeJSONNoType(w, status, v)
+}
+
+// writeJSONNoType encodes without touching Content-Type, for callers that
+// have already chosen one.
+func writeJSONNoType(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)

@@ -44,6 +44,9 @@ func cmdHooks(args []string) {
 		fs := flag.NewFlagSet("hooks create", flag.ExitOnError)
 		scriptName := fs.String("script", "", "the script that handles deliveries")
 		maxBytes := fs.Int64("max-bytes", hooks.DefaultMaxBytes, "largest accepted payload")
+		rateLimit := fs.Int("rate-limit", 0, "requests per minute per client IP (0 = unlimited)")
+		var origins repeated
+		fs.Var(&origins, "allow-origin", "browser origin permitted to call this hook, repeatable")
 		pos := parseFlags(fs, rest)
 		need(pos, 1, "bkn hooks create <name> --script <script>")
 		if *scriptName == "" {
@@ -53,14 +56,21 @@ func cmdHooks(args []string) {
 		if _, err := scripts.Get(*scriptName); err != nil {
 			failHooks(err)
 		}
-		h, err := reg.Create(hooks.Hook{Name: pos[0], Script: *scriptName, MaxBytes: *maxBytes})
+		h, err := reg.Create(hooks.Hook{
+			Name: pos[0], Script: *scriptName, MaxBytes: *maxBytes,
+			AllowOrigin: origins, RateLimit: *rateLimit,
+		})
 		if err != nil {
 			failHooks(err)
 		}
 		// This route is public by design; say so at the moment someone
 		// creates one rather than only in the docs.
-		out.Log("[hooks] %s is PUBLIC and unauthenticated - %s must verify the sender's signature",
+		out.Log("[hooks] %s is PUBLIC and unauthenticated - %s decides who may write",
 			h.Path, h.Script)
+		if h.RateLimit == 0 && len(h.AllowOrigin) > 0 {
+			// A browser-reachable endpoint with no limit is a spam funnel.
+			out.Log("[hooks] %s accepts browser requests with no rate limit; consider --rate-limit", h.Name)
+		}
 		out.Data(map[string]any{"hook": h})
 
 	case "list":
@@ -84,6 +94,9 @@ func cmdHooks(args []string) {
 		maxBytes := fs.Int64("max-bytes", 0, "replace the payload limit")
 		enable := fs.Bool("enable", false, "enable the hook")
 		disable := fs.Bool("disable", false, "disable the hook")
+		rateLimit := fs.Int("rate-limit", 0, "replace the per-minute limit")
+		var origins repeated
+		fs.Var(&origins, "allow-origin", "replace the permitted browser origins")
 		pos := parseFlags(fs, rest)
 		need(pos, 1, "bkn hooks update <name> [--script S] [--max-bytes N] [--enable|--disable]")
 		if *enable && *disable {
@@ -93,12 +106,19 @@ func cmdHooks(args []string) {
 		var scriptPtr *string
 		var bytesPtr *int64
 		var enabled *bool
+		var originsPtr *[]string
+		var ratePtr *int
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "script":
 				scriptPtr = scriptName
 			case "max-bytes":
 				bytesPtr = maxBytes
+			case "rate-limit":
+				ratePtr = rateLimit
+			case "allow-origin":
+				list := []string(origins)
+				originsPtr = &list
 			case "enable":
 				yes := true
 				enabled = &yes
@@ -107,7 +127,7 @@ func cmdHooks(args []string) {
 				enabled = &no
 			}
 		})
-		h, err := reg.Update(pos[0], scriptPtr, bytesPtr, enabled)
+		h, err := reg.Update(pos[0], scriptPtr, bytesPtr, enabled, originsPtr, ratePtr)
 		if err != nil {
 			failHooks(err)
 		}
@@ -125,6 +145,7 @@ func cmdHooks(args []string) {
 		// without a public URL or a provider's retry schedule.
 		fs := flag.NewFlagSet("hooks test", flag.ExitOnError)
 		body := fs.String("body", "", "raw request body: inline, @file, or -")
+		method := fs.String("method", "POST", "request method to simulate")
 		var headers repeated
 		fs.Var(&headers, "header", "header as name=value, repeatable")
 		pos := parseFlags(fs, rest)
@@ -135,7 +156,7 @@ func cmdHooks(args []string) {
 			failHooks(err)
 		}
 		delivery := hooks.Delivery{
-			Hook: h.Name, Method: "POST", Query: map[string]string{},
+			Hook: h.Name, Method: *method, Query: map[string]string{},
 			Headers: map[string]string{}, Body: readRaw(*body),
 		}
 		delivery.BodyBase64 = base64Of(delivery.Body)

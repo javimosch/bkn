@@ -1,0 +1,11 @@
+{
+  "title": "Contact us",
+  "enabled": true,
+  "honeypot": "website",
+  "fields": [
+    { "name": "email", "type": "email", "label": "Your email", "required": true },
+    { "name": "message", "type": "text", "label": "Message", "required": true, "max": 2000 },
+    { "name": "topic", "type": "select", "label": "Topic", "options": ["sales", "support", "other"] }
+  ],
+  "notify": { "enabled": false, "to": "hello@example.com", "from": "forms@example.com" }
+}

@@ -1,0 +1,8 @@
+{
+  "form": "waitlist",
+  "format": "csv",
+  "enabled": true,
+  "limit": 5000,
+  "fields": ["id", "email", "source", "submitted_at"],
+  "password_setting": "exports.waitlist_password"
+}

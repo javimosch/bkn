@@ -123,12 +123,12 @@ func helpJSON() map[string]any {
 			"cron delete":        c([]string{"name"}, none),
 			"cron run":           c([]string{"name"}, none),
 			"cron tick":          c(none, none),
-			"hooks create":       c([]string{"name"}, []string{"--script <s>", "--max-bytes <n>"}),
+			"hooks create":       c([]string{"name"}, []string{"--script <s>", "--max-bytes <n>", "--allow-origin <origin>", "--rate-limit <n>"}),
 			"hooks list":         c(none, none),
 			"hooks show":         c([]string{"name"}, none),
-			"hooks update":       c([]string{"name"}, []string{"--script <s>", "--max-bytes <n>", "--enable", "--disable"}),
+			"hooks update":       c([]string{"name"}, []string{"--script <s>", "--max-bytes <n>", "--allow-origin <origin>", "--rate-limit <n>", "--enable", "--disable"}),
 			"hooks delete":       c([]string{"name"}, none),
-			"hooks test":         c([]string{"name"}, []string{"--body <raw|@file|->", "--header <name=value>"}),
+			"hooks test":         c([]string{"name"}, []string{"--body <raw|@file|->", "--header <name=value>", "--method <m>"}),
 			"lock list":          c(none, none),
 			"lock acquire":       c([]string{"key"}, []string{"--ttl <duration>"}),
 			"lock release":       c([]string{"key", "owner"}, []string{"--force"}),
@@ -216,7 +216,7 @@ func printHelp() {
     bkn files show <ns> <name> | list <ns> | delete <ns> <name>
 
   hooks   public webhook endpoints dispatched to scripts
-    bkn hooks create <name> --script <script>
+    bkn hooks create <name> --script <script> [--allow-origin O] [--rate-limit N]
     bkn hooks list | show <name> | delete <name>
     bkn hooks test <name> --body @payload.json --header sig=...
 

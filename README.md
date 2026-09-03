@@ -286,11 +286,14 @@ scripts, with no Go code added for either — see [`examples/`](examples/):
 |---|---|---|
 | Blog automation | ~2,500 lines, 3 models | 234 lines of JavaScript |
 | Stripe webhook | ~1,500 lines, 2 models | 159 lines of JavaScript |
+| Forms | forms service, controller, model | 154 lines of JavaScript |
+| Waiting-list exports | ~900 lines, two services | 120 lines of JavaScript |
 
-That is the test the core was built for. Porting them did surface four gaps —
-no crypto in the sandbox, no public inbound route, no atomic conditional write,
-and a binary-unsafe `fetch` — which are now core primitives rather than
-one-off patches.
+That is the test the core was built for. Porting them surfaced gaps — no
+crypto in the sandbox, no public inbound route, no atomic conditional write, a
+binary-unsafe `fetch`, then GET hooks, non-JSON responses, CORS and rate
+limiting — every one of which became a general primitive rather than a
+one-off patch. Nothing leaked back into Go.
 
 ## Status
 

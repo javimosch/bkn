@@ -47,8 +47,9 @@
     "stream": "An event log namespace: 'errors', 'audit', 'cron', or whatever an app emits into. Created implicitly by the first event.",
     "cron job": "A schedule bound to a script, with optional input. Cron expressions are the usual 5 fields, plus @hourly/@daily/@weekly/@monthly/@yearly and @every <duration>.",
     "tick": "One pass over due jobs. The daemon ticks every 20s while `bkn serve` runs; `bkn cron tick` does the same pass once, for anyone driving the timing from systemd or a real crontab.",
-    "hook": "A public, unauthenticated URL (/v1/hooks/<name>) bound to a script. The script receives the raw body, the lower-cased headers and the query string, and returns {status, body, headers} to shape the reply. It MUST verify the sender's signature - nothing else does.",
-    "lock": "An expiring lease held under a key, used to stop two runs of the same work overlapping across processes. acquire returns an owner token, or null when somebody else holds it; only that owner can release or renew."
+    "hook": "A public URL (/v1/hooks/<name>) bound to a script, reachable with GET and POST. The script receives the raw body, the lower-cased headers, the query string and the method, and returns {status, body, headers} to shape the reply - including a non-JSON Content-Type for a CSV or a feed. It MUST decide who may write: nothing else does.",
+    "lock": "An expiring lease held under a key, used to stop two runs of the same work overlapping across processes. acquire returns an owner token, or null when somebody else holds it; only that owner can release or renew.",
+    "hook origin": "A hook accepts cross-origin browser requests only from the origins in its allow_origin list; the preflight is refused otherwise. A provider webhook needs none, a form posted from a page needs its site listed."
   },
   "commands": {
     "store": [
@@ -140,12 +141,12 @@
       "bkn cron tick"
     ],
     "hooks": [
-      "bkn hooks create <name> --script <script> [--max-bytes <n>]",
+      "bkn hooks create <name> --script <script> [--max-bytes <n>] [--allow-origin <origin>] [--rate-limit <n>]",
       "bkn hooks list",
       "bkn hooks show <name>",
-      "bkn hooks update <name> [--script <s>] [--max-bytes <n>] [--enable|--disable]",
+      "bkn hooks update <name> [--script <s>] [--max-bytes <n>] [--allow-origin <origin>] [--rate-limit <n>] [--enable|--disable]",
       "bkn hooks delete <name>",
-      "bkn hooks test <name> --body <raw|@file|-> [--header <name=value>]"
+      "bkn hooks test <name> --body <raw|@file|-> [--header <name=value>] [--method <m>]"
     ],
     "lock": [
       "bkn lock list",
@@ -300,6 +301,16 @@
         "bkn lock list",
         "bkn lock release blog-automation --force   # operator override"
       ]
+    },
+    {
+      "goal": "Accept a form posted from a browser, and export the results as CSV",
+      "do": [
+        "bkn store put forms/definitions --id waitlist --data @waitlist-form.json",
+        "bkn script create forms --file forms.js",
+        "bkn hooks create forms --script forms --allow-origin https://your-site.example --rate-limit 10",
+        "bkn hooks create exports --script waitlist-export --rate-limit 30",
+        "curl 'https://host/v1/hooks/exports?name=waitlist&password=...' -o waitlist.csv"
+      ]
     }
   ],
   "gotchas": [
@@ -346,7 +357,11 @@
     "The hook body reaches the script byte-for-byte in `body`, plus `body_base64` for payloads that are not valid UTF-8. Signatures cover exact bytes: never re-serialize before hashing.",
     "bkn.http.fetch returns text by default and a JavaScript string is UTF-8, so binary responses are corrupted. Pass {responseEncoding:'base64'} for anything that is not text.",
     "bkn.store.putIfAbsent returns null when the id already existed, which is the idempotency answer a webhook retry needs. A get-then-put has a race that a retry will eventually find.",
-    "A lock is a lease with an expiry, so a crashed holder cannot block the work forever - but a run that outlives its TTL loses the lock while still going. Renew it, or set the TTL above the worst-case run time."
+    "A lock is a lease with an expiry, so a crashed holder cannot block the work forever - but a run that outlives its TTL loses the lock while still going. Renew it, or set the TTL above the worst-case run time.",
+    "A hook answers GET as well as POST, and the script sees d.method. An export or a form definition is fetched; a submission is posted.",
+    "A hook returning a string with a non-JSON Content-Type is written verbatim, so a CSV stays a CSV. Return an object, or set a JSON content type, and it is encoded instead.",
+    "Cross-origin browser calls are refused unless the origin is in the hook's allow_origin list - the preflight fails, so the real request never leaves the browser. A provider webhook needs no origins at all.",
+    "A public hook a browser can reach should carry --rate-limit; without one it is a spam funnel and a cheap way to fill your disk. The limit is per client IP per minute, and honours X-Forwarded-For so a proxy does not make it global."
   ],
   "see_also": [
     "bkn help-json",

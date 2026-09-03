@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite" // pure Go, no cgo: keeps the static single binary
 )
@@ -40,12 +41,14 @@ CREATE TABLE IF NOT EXISTS locks (
 );
 
 CREATE TABLE IF NOT EXISTS hooks (
-  name       TEXT PRIMARY KEY,
-  script     TEXT NOT NULL,
-  enabled    INTEGER NOT NULL DEFAULT 1,
-  max_bytes  INTEGER NOT NULL DEFAULT 1048576,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  name         TEXT PRIMARY KEY,
+  script       TEXT NOT NULL,
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  max_bytes    INTEGER NOT NULL DEFAULT 1048576,
+  allow_origin TEXT NOT NULL DEFAULT '[]',
+  rate_limit   INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -212,5 +215,27 @@ func Open() (*sql.DB, error) {
 	if _, err := conn.Exec(schema); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := addColumns(conn); err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return conn, nil
+}
+
+// addedColumns are columns introduced after a table first shipped. CREATE
+// TABLE IF NOT EXISTS does nothing to a database that already has the table,
+// so a new column needs an explicit ALTER.
+var addedColumns = []string{
+	`ALTER TABLE hooks ADD COLUMN allow_origin TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE hooks ADD COLUMN rate_limit INTEGER NOT NULL DEFAULT 0`,
+}
+
+func addColumns(conn *sql.DB) error {
+	for _, stmt := range addedColumns {
+		_, err := conn.Exec(stmt)
+		if err == nil || strings.Contains(err.Error(), "duplicate column name") {
+			continue
+		}
+		return fmt.Errorf("%s: %w", stmt, err)
+	}
+	return nil
 }

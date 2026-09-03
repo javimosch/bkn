@@ -50,7 +50,7 @@ func TestNormalizerAppliesToWritesAndFilters(t *testing.T) {
 	if _, err := s.Put(r, "", map[string]any{"email": "  Ada@Example.IO "}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, err := s.Find(r, []store.Filter{{Field: "email", Value: "ADA@EXAMPLE.IO"}})
+	got, err := s.Find(r, []store.Filter{{Field: "email", Op: store.OpEq, Value: "ADA@EXAMPLE.IO"}})
 	if err != nil {
 		t.Fatalf("Find with differently-cased filter: %v", err)
 	}
@@ -97,15 +97,15 @@ func TestFilterTypesMatchJSONTypes(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	for _, f := range []store.Filter{
-		{Field: "age", Value: "30"},
-		{Field: "active", Value: "true"},
-		{Field: "name", Value: "ada"},
+		{Field: "age", Op: store.OpEq, Value: "30"},
+		{Field: "active", Op: store.OpEq, Value: "true"},
+		{Field: "name", Op: store.OpEq, Value: "ada"},
 	} {
 		if _, err := s.Find(r, []store.Filter{f}); err != nil {
 			t.Errorf("Find %s=%s: %v", f.Field, f.Value, err)
 		}
 	}
-	if _, err := s.Find(r, []store.Filter{{Field: "age", Value: "31"}}); err != store.ErrNotFound {
+	if _, err := s.Find(r, []store.Filter{{Field: "age", Op: store.OpEq, Value: "31"}}); err != store.ErrNotFound {
 		t.Errorf("Find on a non-matching number = %v, want ErrNotFound", err)
 	}
 }
@@ -136,11 +136,11 @@ func TestListPagesAndDeleteReportsMissing(t *testing.T) {
 			t.Fatalf("Put: %v", err)
 		}
 	}
-	page, err := s.List(r, nil, 2, 0)
+	page, err := s.List(r, store.ListOptions{Limit: 2})
 	if err != nil || len(page) != 2 {
 		t.Fatalf("List limit 2 = %d records, %v", len(page), err)
 	}
-	rest, err := s.List(r, nil, 10, 2)
+	rest, err := s.List(r, store.ListOptions{Limit: 10, Offset: 2})
 	if err != nil || len(rest) != 3 {
 		t.Fatalf("List offset 2 = %d records, %v", len(rest), err)
 	}
@@ -153,7 +153,7 @@ func TestListPagesAndDeleteReportsMissing(t *testing.T) {
 // polling for records should not have to special-case "not created yet".
 func TestListUnknownCollectionIsEmpty(t *testing.T) {
 	s := newStore(t)
-	recs, err := s.List(ref(t, "myapp/nothing"), nil, 10, 0)
+	recs, err := s.List(ref(t, "myapp/nothing"), store.ListOptions{Limit: 10})
 	if err != nil || len(recs) != 0 {
 		t.Errorf("List on unknown collection = %v records, %v", len(recs), err)
 	}

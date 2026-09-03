@@ -64,8 +64,8 @@ func helpJSON() map[string]any {
 			"store create":       c([]string{"ref"}, []string{"--normalize <field=rule>"}),
 			"store put":          c([]string{"ref"}, []string{"--data <json|@file|->", "--id <id>", "--if-absent"}),
 			"store get":          c([]string{"ref", "id"}, none),
-			"store find":         c([]string{"ref"}, []string{"--where <field=value>"}),
-			"store list":         c([]string{"ref"}, []string{"--where <field=value>", "--limit <n>", "--offset <n>"}),
+			"store find":         c([]string{"ref"}, []string{"--where <predicate>"}),
+			"store list":         c([]string{"ref"}, []string{"--where <predicate>", "--order-by <field[:desc]>", "--limit <n>", "--offset <n>"}),
 			"store patch":        c([]string{"ref", "id"}, []string{"--data <json|@file|->"}),
 			"store delete":       c([]string{"ref", "id"}, none),
 			"store collections":  c(none, []string{"--ns <namespace>"}),
@@ -161,6 +161,7 @@ func helpJSON() map[string]any {
 			"list_limit":        50,
 			"kv_types":          kv.ValidTypes(),
 			"normalizers":       store.ValidNormalizers(),
+			"filter_operators":  store.Ops(),
 			"script_timeout_ms": script.DefaultTimeoutMS,
 			"global_roles":      auth.GlobalRoles(),
 			"org_roles":         auth.OrgRoles(),
@@ -187,7 +188,7 @@ func printHelp() {
     bkn store put <ns/coll> --data <json> [--id <id>]
     bkn store get <ns/coll> <id>
     bkn store find <ns/coll> --where field=value
-    bkn store list <ns/coll> [--where field=value] [--limit N] [--offset N]
+    bkn store list <ns/coll> [--where <predicate>] [--order-by field:desc] [--limit N]
     bkn store patch <ns/coll> <id> --data <json>
     bkn store delete <ns/coll> <id>
     bkn store collections [--ns <namespace>]

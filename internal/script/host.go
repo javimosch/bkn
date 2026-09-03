@@ -52,10 +52,28 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 		return map[string]any(rec)
 	}
 
+	// A filter value may be a plain value, or an object naming an operator:
+	//   { price: { gt: 20 }, status: { in: ["draft", "live"] } }
 	filtersFrom := func(obj map[string]any) []store.Filter {
 		filters := make([]store.Filter, 0, len(obj))
 		for field, val := range obj {
-			filters = append(filters, store.Filter{Field: field, Value: fmt.Sprintf("%v", val)})
+			if spec, ok := val.(map[string]any); ok {
+				for op, operand := range spec {
+					f := store.Filter{Field: field, Op: store.Op(op)}
+					if list, ok := operand.([]any); ok {
+						f.Op = store.OpIn
+						for _, item := range list {
+							f.Values = append(f.Values, fmt.Sprintf("%v", item))
+						}
+					} else {
+						f.Value = fmt.Sprintf("%v", operand)
+					}
+					filters = append(filters, f)
+				}
+				continue
+			}
+			filters = append(filters, store.Filter{Field: field, Op: store.OpEq,
+				Value: fmt.Sprintf("%v", val)})
 		}
 		return filters
 	}
@@ -106,21 +124,34 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 			}
 			return true
 		},
+		"count": func(refStr string, where map[string]any) int {
+			total, err := r.st.Count(ref(refStr), filtersFrom(where))
+			if err != nil {
+				throw(err)
+			}
+			return total
+		},
 		"list": func(refStr string, opts map[string]any) []any {
-			var filters []store.Filter
-			limit, offset := 50, 0
+			listOpts := store.ListOptions{Limit: 50, Desc: true}
 			if opts != nil {
 				if w, ok := opts["where"].(map[string]any); ok {
-					filters = filtersFrom(w)
+					listOpts.Filters = filtersFrom(w)
 				}
 				if n, ok := toInt(opts["limit"]); ok {
-					limit = n
+					listOpts.Limit = n
 				}
 				if n, ok := toInt(opts["offset"]); ok {
-					offset = n
+					listOpts.Offset = n
+				}
+				if field, ok := opts["order_by"].(string); ok && field != "" {
+					listOpts.OrderBy = field
+					listOpts.Desc = false
+				}
+				if order, ok := opts["order"].(string); ok {
+					listOpts.Desc = order == "desc"
 				}
 			}
-			recs, err := r.st.List(ref(refStr), filters, limit, offset)
+			recs, err := r.st.List(ref(refStr), listOpts)
 			if err != nil {
 				throw(err)
 			}

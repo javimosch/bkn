@@ -31,7 +31,7 @@
     "document": "A JSON object. Its id is returned merged in under the 'id' key, so reads give one flat object rather than a wrapper.",
     "id": "26-char sortable ULID, minted by bkn unless you supply one - pass --id, or include 'id' in the document body. Ids are immutable; patch cannot change one.",
     "normalizer": "A per-collection rule ('lower', 'upper', 'trim', 'trim_lower') declared on a field. bkn applies it on every write AND to every filter value for that field, so a lookup always finds what a write stored.",
-    "filter": "A single field equality predicate, 'field=value'. Values that parse as a number, true, false or null are compared as that type.",
+    "filter": "A predicate on one field: field=value, field!=value, field>value, field>=value, field<value, field<=value, or field:in=a,b. Filters combine with AND. Values that parse as a number, true, false or null are compared as that type. Six operators, flat and ANDed - deliberately not a query language.",
     "kv type": "'string' (opaque), 'json' (validated on write), or 'encrypted' (sealed with AES-256-GCM before storage, opened on read).",
     "keyring": "The set of keys that can decrypt, plus the one id that encrypts. Rotation means adding a key, pointing BKN_ENCRYPTION_KEY_ID at it, and running 'bkn kv rekey'.",
     "public entry": "A kv entry marked --public is readable through the unauthenticated HTTP settings route. An encrypted entry can never be public.",
@@ -49,16 +49,16 @@
     "tick": "One pass over due jobs. The daemon ticks every 20s while `bkn serve` runs; `bkn cron tick` does the same pass once, for anyone driving the timing from systemd or a real crontab.",
     "hook": "A public URL (/v1/hooks/<name>) bound to a script, reachable with GET and POST. The script receives the raw body, the lower-cased headers, the query string and the method, and returns {status, body, headers} to shape the reply - including a non-JSON Content-Type for a CSV or a feed. It MUST decide who may write: nothing else does.",
     "lock": "An expiring lease held under a key, used to stop two runs of the same work overlapping across processes. acquire returns an owner token, or null when somebody else holds it; only that owner can release or renew.",
-    "hook origin": "A hook accepts cross-origin browser requests only from the origins in its allow_origin list; the preflight is refused otherwise. A provider webhook needs none, a form posted from a page needs its site listed."
+    "hook origin": "A hook accepts cross-origin browser requests only from the origins in its allow_origin list; the preflight is refused otherwise. A provider webhook needs none, a form posted from a page needs its site listed.",
+    "ordering": "store list sorts by a document field with --order-by <field> or <field>:desc, and by recency when omitted. Records missing the field sort last in both directions."
   },
   "commands": {
     "store": [
       "bkn store create <ns/coll> [--normalize <field=rule>]",
-      "bkn store put <ns/coll> --data <json|@file|-> [--id <id>]",
-      "bkn store put <ns/coll> --data <json|@file|-> --if-absent [--id <id>]",
+      "bkn store put <ns/coll> --data <json|@file|-> [--id <id>] [--if-absent]",
       "bkn store get <ns/coll> <id>",
-      "bkn store find <ns/coll> --where <field=value>",
-      "bkn store list <ns/coll> [--where <field=value>] [--limit <n>] [--offset <n>]",
+      "bkn store find <ns/coll> --where <predicate>",
+      "bkn store list <ns/coll> [--where <predicate>] [--order-by <field[:asc|:desc]>] [--limit <n>] [--offset <n>]",
       "bkn store patch <ns/coll> <id> --data <json|@file|->",
       "bkn store delete <ns/coll> <id>",
       "bkn store collections [--ns <namespace>]"
@@ -311,6 +311,14 @@
         "bkn hooks create exports --script waitlist-export --rate-limit 30",
         "curl 'https://host/v1/hooks/exports?name=waitlist&password=...' -o waitlist.csv"
       ]
+    },
+    {
+      "goal": "Page through a filtered, sorted collection",
+      "do": [
+        "bkn store list shop/products --where 'price>20' --where status=live --order-by price:desc",
+        "bkn store list shop/products --where 'status:in=live,archived' --limit 20 --offset 40",
+        "# the response carries `total`, the number of matches, alongside `count`, the page size"
+      ]
     }
   ],
   "gotchas": [
@@ -361,7 +369,12 @@
     "A hook answers GET as well as POST, and the script sees d.method. An export or a form definition is fetched; a submission is posted.",
     "A hook returning a string with a non-JSON Content-Type is written verbatim, so a CSV stays a CSV. Return an object, or set a JSON content type, and it is encoded instead.",
     "Cross-origin browser calls are refused unless the origin is in the hook's allow_origin list - the preflight fails, so the real request never leaves the browser. A provider webhook needs no origins at all.",
-    "A public hook a browser can reach should carry --rate-limit; without one it is a spam funnel and a cheap way to fill your disk. The limit is per client IP per minute, and honours X-Forwarded-For so a proxy does not make it global."
+    "A public hook a browser can reach should carry --rate-limit; without one it is a spam funnel and a cheap way to fill your disk. The limit is per client IP per minute, and honours X-Forwarded-For so a proxy does not make it global.",
+    "store list returns both count (rows on this page) and total (rows matching the filter), so a paginated view can say \"page 1 of 12\".",
+    "Sorting is by one document field, ascending unless you write field:desc. There is no multi-field sort: if you need one, sort in a script or store a composite field.",
+    "Records that lack the sorted field sort last in both directions, rather than being buried first by SQL's NULL ordering.",
+    "Filter values are typed by how they look: price>20 compares numbers, status=true compares a boolean, name=20 compares the number 20 and not the string. Quote nothing - the store decides from the text.",
+    "Without --order-by, records come back newest first, and updated_at has second resolution: writes in the same second are ordered by id. With generated ULIDs that is still creation order; with caller-supplied ids it is alphabetical."
   ],
   "see_also": [
     "bkn help-json",

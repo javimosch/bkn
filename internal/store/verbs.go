@@ -14,24 +14,101 @@ import (
 // to unpick.
 type Record map[string]any
 
-// Filter is one field equality predicate: the only comparison any observed
-// consumer used.
+// Op is a filter comparison. The set is deliberately closed: six operators,
+// flat and ANDed, one sort field. Anything richer belongs in a script, not in
+// a query language grafted onto the store.
+type Op string
+
+const (
+	OpEq  Op = "eq"
+	OpNe  Op = "ne"
+	OpGt  Op = "gt"
+	OpGte Op = "gte"
+	OpLt  Op = "lt"
+	OpLte Op = "lte"
+	OpIn  Op = "in"
+)
+
+func Ops() []string { return []string{"eq", "ne", "gt", "gte", "lt", "lte", "in"} }
+
+var sqlOp = map[Op]string{
+	OpEq: "=", OpNe: "!=", OpGt: ">", OpGte: ">=", OpLt: "<", OpLte: "<=",
+}
+
+// Filter is one predicate on one field.
 type Filter struct {
-	Field string
-	Value string
+	Field  string
+	Op     Op
+	Value  string
+	Values []string // OpIn only
 }
 
-// ParseFilter parses "field=value".
+// ListOptions describes a page of a collection.
+type ListOptions struct {
+	Filters []Filter
+	OrderBy string // a document field; empty means recency
+	Desc    bool
+	Limit   int
+	Offset  int
+}
+
+var filterSyntax = []struct {
+	token string
+	op    Op
+}{
+	{":in=", OpIn},
+	{">=", OpGte},
+	{"<=", OpLte},
+	{"!=", OpNe},
+	{">", OpGt},
+	{"<", OpLt},
+	{"=", OpEq},
+}
+
+// ParseFilter reads "field=value", "field>20", "field:in=a,b" and friends.
+//
+// The operator is the one that appears EARLIEST in the string, with the
+// longest token winning a tie. Scanning operator-by-operator instead would
+// split "note=a>b" on the ">" it finds inside the value, because ">" is
+// checked before "=" and Cut looks anywhere in the string.
 func ParseFilter(s string) (Filter, error) {
-	f, v, ok := strings.Cut(s, "=")
-	if !ok || f == "" {
-		return Filter{}, fmt.Errorf("filter must be field=value, got %q", s)
+	best := -1
+	var bestToken string
+	var bestOp Op
+	for _, syntax := range filterSyntax {
+		at := strings.Index(s, syntax.token)
+		if at <= 0 {
+			continue // not present, or nothing before it to name a field
+		}
+		if best == -1 || at < best || (at == best && len(syntax.token) > len(bestToken)) {
+			best, bestToken, bestOp = at, syntax.token, syntax.op
+		}
 	}
-	return Filter{Field: f, Value: v}, nil
+	if best >= 0 {
+		syntax := struct {
+			token string
+			op    Op
+		}{bestToken, bestOp}
+		field, value := s[:best], s[best+len(bestToken):]
+		f := Filter{Field: field, Op: syntax.op, Value: value}
+		if syntax.op == OpIn {
+			for _, v := range strings.Split(value, ",") {
+				if v = strings.TrimSpace(v); v != "" {
+					f.Values = append(f.Values, v)
+				}
+			}
+			if len(f.Values) == 0 {
+				return Filter{}, fmt.Errorf("%q: :in= needs at least one value", s)
+			}
+		}
+		return f, nil
+	}
+	return Filter{}, fmt.Errorf("filter must be field=value, field>value, field:in=a,b, "+
+		"or use != >= <=, got %q", s)
 }
 
-// bindValue converts a filter's text value to the type json_extract will
-// return for that field, so `--where age=30` matches the number 30 and
+// bindValue converts a filter's text value to the type json_extract returns
+// for that field, so `--where age=30` matches the number 30 and
 // `--where active=true` matches the boolean.
 func bindValue(v string) any {
 	switch v {
@@ -48,24 +125,67 @@ func bindValue(v string) any {
 	return v
 }
 
+// whereClause builds the predicate shared by List, Find and Count.
 func (s *Store) whereClause(c Collection, filters []Filter) (string, []any, error) {
 	var sb strings.Builder
 	var args []any
-	for _, f := range filters {
-		val := f.Value
-		// The collection's normalizer applies to the filter value too, so a
-		// lookup by email finds the row a normalized write created.
-		if rule, ok := c.Normalize[f.Field]; ok {
-			n, err := normalize(rule, val)
-			if err != nil {
-				return "", nil, err
-			}
-			val = n
+
+	// The collection's normalizer applies to filter values too, so a lookup
+	// by email finds the row a normalized write created.
+	normalizeValue := func(field, value string) (string, error) {
+		rule, ok := c.Normalize[field]
+		if !ok {
+			return value, nil
 		}
-		sb.WriteString(" AND json_extract(doc, ?) = ?")
-		args = append(args, "$."+f.Field, bindValue(val))
+		return normalize(rule, value)
+	}
+
+	for _, f := range filters {
+		path := "$." + f.Field
+		if f.Op == OpIn {
+			placeholders := make([]string, 0, len(f.Values))
+			args = append(args, path)
+			for _, raw := range f.Values {
+				v, err := normalizeValue(f.Field, raw)
+				if err != nil {
+					return "", nil, err
+				}
+				placeholders = append(placeholders, "?")
+				args = append(args, bindValue(v))
+			}
+			sb.WriteString(" AND json_extract(doc, ?) IN (" + strings.Join(placeholders, ",") + ")")
+			continue
+		}
+		operator, ok := sqlOp[f.Op]
+		if !ok {
+			return "", nil, fmt.Errorf("unsupported operator %q", f.Op)
+		}
+		v, err := normalizeValue(f.Field, f.Value)
+		if err != nil {
+			return "", nil, err
+		}
+		sb.WriteString(" AND json_extract(doc, ?) " + operator + " ?")
+		args = append(args, path, bindValue(v))
 	}
 	return sb.String(), args, nil
+}
+
+// orderClause sorts by a document field, or by recency when none is given.
+//
+// Records missing the field sort last in both directions: SQLite puts NULL
+// first ascending, which would otherwise bury every populated row beneath the
+// ones that do not have the field at all.
+func orderClause(field string, desc bool) (string, []any) {
+	direction := "ASC"
+	if desc {
+		direction = "DESC"
+	}
+	if field == "" {
+		return " ORDER BY updated_at " + direction + ", id " + direction, nil
+	}
+	path := "$." + field
+	return " ORDER BY (json_extract(doc, ?) IS NULL), json_extract(doc, ?) " +
+		direction + ", id " + direction, []any{path, path}
 }
 
 func decode(id, doc string) (Record, error) {
@@ -184,7 +304,7 @@ func (s *Store) Get(r Ref, id string) (Record, error) {
 
 // Find returns the first document matching every filter, or ErrNotFound.
 func (s *Store) Find(r Ref, filters []Filter) (Record, error) {
-	recs, err := s.List(r, filters, 1, 0)
+	recs, err := s.List(r, ListOptions{Filters: filters, Limit: 1})
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +314,8 @@ func (s *Store) Find(r Ref, filters []Filter) (Record, error) {
 	return recs[0], nil
 }
 
-// List returns documents matching every filter, newest first.
-func (s *Store) List(r Ref, filters []Filter, limit, offset int) ([]Record, error) {
+// List returns a page of documents.
+func (s *Store) List(r Ref, opts ListOptions) ([]Record, error) {
 	c, err := s.getCollection(r)
 	if err == ErrNoCollection {
 		return []Record{}, nil
@@ -203,19 +323,22 @@ func (s *Store) List(r Ref, filters []Filter, limit, offset int) ([]Record, erro
 	if err != nil {
 		return nil, err
 	}
-	where, args, err := s.whereClause(c, filters)
+	where, whereArgs, err := s.whereClause(c, opts.Filters)
 	if err != nil {
 		return nil, err
 	}
+	limit := opts.Limit
 	if limit <= 0 {
 		limit = 50
 	}
-	q := `SELECT id, doc FROM records WHERE ns=? AND coll=?` + where +
-		` ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`
-	full := append([]any{r.NS, r.Coll}, args...)
-	full = append(full, limit, offset)
+	order, orderArgs := orderClause(opts.OrderBy, opts.Desc || opts.OrderBy == "")
 
-	rows, err := s.db.Query(q, full...)
+	args := append([]any{r.NS, r.Coll}, whereArgs...)
+	args = append(args, orderArgs...)
+	args = append(args, limit, opts.Offset)
+
+	rows, err := s.db.Query(`SELECT id, doc FROM records WHERE ns=? AND coll=?`+
+		where+order+` LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +357,26 @@ func (s *Store) List(r Ref, filters []Filter, limit, offset int) ([]Record, erro
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+// Count reports how many documents match, which is what a paginated list needs
+// to say "page 1 of 12" rather than only "here are 50".
+func (s *Store) Count(r Ref, filters []Filter) (int, error) {
+	c, err := s.getCollection(r)
+	if err == ErrNoCollection {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	where, args, err := s.whereClause(c, filters)
+	if err != nil {
+		return 0, err
+	}
+	var total int
+	err = s.db.QueryRow(`SELECT COUNT(*) FROM records WHERE ns=? AND coll=?`+where,
+		append([]any{r.NS, r.Coll}, args...)...).Scan(&total)
+	return total, err
 }
 
 // Patch shallow-merges fields into an existing document ($set semantics).

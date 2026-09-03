@@ -231,6 +231,15 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+func isOp(candidate string) bool {
+	for _, op := range store.Ops() {
+		if op == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 func parseRef(w http.ResponseWriter, r *http.Request) (store.Ref, bool) {
 	ref, err := store.ParseRef(r.PathValue("ns") + "/" + r.PathValue("coll"))
 	if err != nil {
@@ -248,20 +257,42 @@ func (s *Server) storeList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var filters []store.Filter
 	for field, vals := range q {
-		if field == "limit" || field == "offset" {
+		switch field {
+		case "limit", "offset", "order_by", "order":
 			continue
 		}
-		filters = append(filters, store.Filter{Field: field, Value: vals[0]})
+		// A query parameter may carry an operator: ?price=gt:20
+		f := store.Filter{Field: field, Op: store.OpEq, Value: vals[0]}
+		if op, value, ok := strings.Cut(vals[0], ":"); ok && isOp(op) {
+			f.Op = store.Op(op)
+			f.Value = value
+			if f.Op == store.OpIn {
+				f.Values = strings.Split(value, ",")
+			}
+		}
+		filters = append(filters, f)
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
 
-	recs, err := s.st.List(ref, filters, limit, offset)
+	recs, err := s.st.List(ref, store.ListOptions{
+		Filters: filters, OrderBy: q.Get("order_by"),
+		Desc:  q.Get("order") != "asc",
+		Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+	total, err := s.st.Count(ref, filters)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "collection": ref.String(), "count": len(recs), "records": recs})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "collection": ref.String(), "count": len(recs),
+		"total": total, "records": recs,
+	})
 }
 
 func (s *Server) storePut(w http.ResponseWriter, r *http.Request) {

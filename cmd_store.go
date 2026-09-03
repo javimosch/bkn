@@ -105,22 +105,33 @@ func cmdStore(args []string) {
 	case "list":
 		fs := flag.NewFlagSet("store list", flag.ExitOnError)
 		var wheres repeated
-		fs.Var(&wheres, "where", "field=value, repeatable")
+		fs.Var(&wheres, "where", "predicate, repeatable: field=value, field>value, field:in=a,b")
+		orderBy := fs.String("order-by", "", "document field to sort by, optionally field:desc")
 		limit := fs.Int("limit", 50, "maximum records")
 		offset := fs.Int("offset", 0, "records to skip")
 		pos := parseFlags(fs, rest)
-		need(pos, 1, "bkn store list <ns/coll> [--where field=value] [--limit N] [--offset N]")
+		need(pos, 1, "bkn store list <ns/coll> [--where field=value] [--order-by field:desc] [--limit N]")
 
 		ref := parseRef(pos[0])
-		recs, err := st.List(ref, parseFilters(wheres), *limit, *offset)
+		filters := parseFilters(wheres)
+		field, desc := parseOrderBy(*orderBy)
+		recs, err := st.List(ref, store.ListOptions{
+			Filters: filters, OrderBy: field, Desc: desc, Limit: *limit, Offset: *offset,
+		})
+		if err != nil {
+			failStore(err)
+		}
+		total, err := st.Count(ref, filters)
 		if err != nil {
 			failStore(err)
 		}
 		out.Data(map[string]any{
 			"collection": ref.String(),
 			"count":      len(recs),
+			"total":      total,
 			"limit":      *limit,
 			"offset":     *offset,
+			"order_by":   *orderBy,
 			"records":    recs,
 		})
 
@@ -160,12 +171,35 @@ func cmdStore(args []string) {
 	}
 }
 
+// parseOrderBy reads "price" or "price:desc". Recency remains the default, so
+// an omitted flag behaves exactly as it did before ordering existed.
+func parseOrderBy(spec string) (string, bool) {
+	if spec == "" {
+		return "", true
+	}
+	field, direction, ok := strings.Cut(spec, ":")
+	if !ok {
+		return field, false
+	}
+	switch direction {
+	case "desc":
+		return field, true
+	case "asc":
+		return field, false
+	default:
+		out.Fail(out.InvalidValue, "invalid_order",
+			"--order-by takes <field>, <field>:asc or <field>:desc, got "+spec)
+		return "", false
+	}
+}
+
 func parseFilters(specs []string) []store.Filter {
 	var filters []store.Filter
 	for _, s := range specs {
 		f, err := store.ParseFilter(s)
 		if err != nil {
-			out.Fail(out.InvalidValue, "invalid_filter", err.Error(), "--where email=a@b.io")
+			out.Fail(out.InvalidValue, "invalid_filter", err.Error(),
+				"--where email=a@b.io", "--where price>20", "--where status:in=draft,live")
 		}
 		filters = append(filters, f)
 	}

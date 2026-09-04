@@ -11,11 +11,8 @@ primary interface; HTTP mirrors it.
 
 ## North star
 
-bkn should make a complex system **smaller**, not merely possible. The bar is
-not "could this app run on bkn" but "would this app be *less code* on bkn". An
-application bkn cannot serve is a gap to close, not a boundary to defend.
-
-The admission rule that keeps that ambition from rebuilding superbackend:
+The vision lives in [VISION.md](VISION.md); the part you need while writing code
+is the rule for what gets into the core:
 
 > **Admit a primitive that removes a class of application code from every
 > embedder. Refuse a query feature that only moves application code into bkn.**
@@ -24,9 +21,8 @@ Atomic field updates remove read-modify-write races from every concurrent
 writer — admit. Joins move query composition into bkn and remove nothing —
 refuse, denormalize, and pay the write amplification knowingly.
 
-When this and rule 2 disagree, this wins. The six-verb line is where the
-surface sits today, not a promise that it never moves. What it must never
-become is a query language.
+An application bkn cannot serve is a gap to close, not a boundary to defend.
+When this and rule 2 disagree, this wins.
 
 ## The rules that shape the code
 

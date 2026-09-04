@@ -26,6 +26,29 @@ The evidence, not the hope: nine domains of an 85k-line Node/Express/Mongo
 backend moved onto bkn as roughly 1,700 lines of scripts, with almost nothing
 leaking back into Go.
 
+## What gets in
+
+The north-star metric below implies an ambition — a complex system should get
+**smaller** on bkn, not merely become possible — and that ambition has an
+obvious failure mode: it is this project's own origin. superbackend reached 85k
+lines because the core had no escape hatch and every need became a feature.
+Absorbing requirements one SQL construct at a time makes bkn SQLite with extra
+steps.
+
+So the core moves under one rule:
+
+> **Admit a primitive that removes a class of application code from every
+> embedder. Refuse a query feature that only moves application code into bkn.**
+
+Atomic field updates remove read-modify-write races from everyone who writes
+concurrently — admit. Joins move query composition into bkn and remove nothing
+from the caller — refuse, denormalize, and pay the write amplification
+knowingly.
+
+This is the only way the six-verb line in `AGENTS.md` moves. It is where the
+surface sits today, not a promise that it never moves — but what it must never
+become is a query language.
+
 ## Why this shape
 
 | value | what it decided here |
@@ -53,6 +76,16 @@ Known, because it was measured:
 - Read paths are a wash between the two; the write path trades p50 for p99.
 - 20.1 MB stripped / 17 MB idle RSS for the Go build; 7.8 MB static / 3.3 MB for
   the MFL one.
+- Two *other people's* backends were fit-checked against `store`, counting
+  distinct SQL statements and how many exceed what it offers. superlandings-go
+  (8k LOC, 8 tables): 48 statements, 3 beyond, 1 relational. automaintainer-saas-panel
+  (131k LOC, 20 tables): 202 statements, 33 beyond (16%), only ~10 relational (5%).
+  Of the large one's 33 outliers, 8 are atomic updates (`log || ?`, `n + 1`), 4 a
+  sort tiebreak, 2 retention trims, 2 compare-and-set guards, 1 a status rollup,
+  and 9 plain `COUNT(*)` that `list` already answers with `total`. **The distance
+  between bkn and a complex system is mostly atomicity and summarisation, not a
+  query language** — a gap that closes with primitives, which is what the
+  admission rule allows.
 
 Not known, and worth saying plainly:
 

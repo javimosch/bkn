@@ -82,49 +82,6 @@ terminal. bkn loses both. That is a real cost, and if it matters to you,
 PocketBase already solved it well. This is a scope decision about what belongs
 in the core — not a claim that UIs are bad.
 
-## North star
-
-bkn should make a complex system **smaller**, not merely possible.
-
-The bar is not "could this app run on bkn". It is "would this app be *less
-code* on bkn". A backend core that only fits simple applications is a toy; the
-interesting claim is that a large, tangled codebase gets smaller when its
-storage stops being bespoke. An application bkn cannot serve is a gap to close,
-not a scope boundary to defend.
-
-That ambition has an obvious failure mode, and it is this project's own origin
-story: superbackend reached 85k lines because the core had no escape hatch and
-every need became a feature. Absorbing requirements one SQL construct at a time
-would make bkn SQLite with extra steps, and the thesis dies with it. So the
-rule for what gets in:
-
-> **Admit a primitive that removes a class of application code from every
-> embedder. Refuse a query feature that only moves application code into bkn.**
-
-Atomic field updates remove read-modify-write races from everyone who writes
-concurrently — admit. Joins move query composition into bkn and remove nothing
-from the caller — refuse, denormalize, and pay the write amplification
-knowingly.
-
-### Measured against two real codebases
-
-Counting distinct SQL statements, and how many exceed what `store` offers:
-
-| codebase | statements | beyond the allowance | genuinely relational |
-|---|---|---|---|
-| superlandings-go — 8k LOC, 8 tables | 48 | 3 | 1 |
-| automaintainer-saas-panel — 131k LOC, 20 tables | 202 | 33 (16%) | ~10 (5%) |
-
-The large one is the informative one. Of its 33 outliers: 8 are atomic updates
-(`log || ?`, `n + 1`), 4 are a sort tiebreak, 2 are retention trims, 2 are
-compare-and-set guards, 1 is a status rollup, and 9 are plain `COUNT(*)` that
-`list` already answers with `total`. Only the 8 joins and 2 subqueries are
-relational.
-
-The distance between bkn and a complex system is therefore mostly **atomicity
-and summarisation, not a query language** — a gap that closes with primitives,
-which is exactly what the rule above admits.
-
 ## Why so few primitives
 
 `bkn` replaces a 85k-line Node backend that had grown ~40 admin domains. An
@@ -141,6 +98,25 @@ The lesson was not "port the 40 domains". It was that features multiply when
 the core lacks an escape hatch. So the core is small on purpose — **store**,
 **kv**, and **script** — with everything else built on top rather than beside
 them.
+
+Small is not the same as limited. The bar for any application is not "could
+this run on bkn" but "would this be *less code* on bkn" — an application bkn
+cannot serve is a gap to close, not a boundary to defend. What keeps that from
+rebuilding superbackend is a single admission rule, in
+[VISION.md](VISION.md#what-gets-in): admit a primitive that removes a class of
+application code from every embedder; refuse a query feature that only moves
+application code into bkn.
+
+Fit-checked against two real Go codebases, counting distinct SQL statements and
+how many exceed what `store` offers:
+
+| codebase | statements | beyond the allowance | genuinely relational |
+|---|---|---|---|
+| superlandings-go — 8k LOC, 8 tables | 48 | 3 | 1 |
+| automaintainer-saas-panel — 131k LOC, 20 tables | 202 | 33 (16%) | ~10 (5%) |
+
+The large one is the informative one: of its 33 outliers, only the 8 joins and
+2 subqueries are relational. The rest is atomicity and summarisation.
 
 ## Identity, without billing
 

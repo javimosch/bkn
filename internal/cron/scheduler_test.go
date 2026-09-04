@@ -75,8 +75,14 @@ func TestTickRunsDueJobsAndAdvancesThem(t *testing.T) {
 	mustScript(t, scripts, "ping", "function main(){ return {ok:true} }")
 	mustJob(t, reg, cron.Job{Name: "beat", Schedule: "@every 1s", Script: "ping"})
 
+	// Tick takes the time to evaluate against, so this drives the clock
+	// instead of sleeping. Sleeping made the test both slow and flaky: the
+	// gap between two real time.Now() calls is whatever the machine was
+	// doing, which decided whether the second tick was due.
+	base := time.Now()
+
 	// Nothing is due yet.
-	results, err := scheduler.Tick(time.Now())
+	results, err := scheduler.Tick(base)
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
@@ -84,8 +90,9 @@ func TestTickRunsDueJobsAndAdvancesThem(t *testing.T) {
 		t.Errorf("ran %d jobs before anything was due", len(results))
 	}
 
-	time.Sleep(1100 * time.Millisecond)
-	results, err = scheduler.Tick(time.Now())
+	// The job was scheduled from the wall clock at creation, so step past it.
+	due := base.Add(2 * time.Second)
+	results, err = scheduler.Tick(due)
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
@@ -94,12 +101,32 @@ func TestTickRunsDueJobsAndAdvancesThem(t *testing.T) {
 	}
 
 	// The job was claimed, so an immediate second tick must not re-run it.
-	again, err := scheduler.Tick(time.Now())
+	again, err := scheduler.Tick(due)
 	if err != nil {
 		t.Fatalf("second Tick: %v", err)
 	}
 	if len(again) != 0 {
 		t.Errorf("a claimed job ran twice: %+v", again)
+	}
+
+	// Nor may it run again before its interval has actually elapsed. Rounding
+	// the next run down to the second used to schedule it inside the current
+	// second, so an @every 1s job re-fired milliseconds later.
+	early, err := scheduler.Tick(due.Add(999 * time.Millisecond))
+	if err != nil {
+		t.Fatalf("early Tick: %v", err)
+	}
+	if len(early) != 0 {
+		t.Errorf("@every 1s ran again after %v: %+v", 999*time.Millisecond, early)
+	}
+
+	// Once the interval has passed it is due again.
+	next, err := scheduler.Tick(due.Add(2 * time.Second))
+	if err != nil {
+		t.Fatalf("later Tick: %v", err)
+	}
+	if len(next) != 1 {
+		t.Errorf("job did not come due again: %+v", next)
 	}
 
 	j, err := reg.Get("beat")
@@ -112,8 +139,13 @@ func TestTickRunsDueJobsAndAdvancesThem(t *testing.T) {
 
 	// The scheduler records what it did.
 	logged, err := log.List(cron.EventStream, events.Query{})
-	if err != nil || len(logged) != 1 || logged[0].Type != "cron.ok" {
-		t.Errorf("cron events = %+v, %v", logged, err)
+	if err != nil || len(logged) != 2 {
+		t.Errorf("cron events = %+v, %v, want two runs", logged, err)
+	}
+	for _, e := range logged {
+		if e.Type != "cron.ok" {
+			t.Errorf("event %+v, want cron.ok", e)
+		}
 	}
 }
 
@@ -131,8 +163,7 @@ func TestDisabledJobsDoNotRun(t *testing.T) {
 		t.Error("a disabled job kept a next_run_at and would fire when re-enabled")
 	}
 
-	time.Sleep(1100 * time.Millisecond)
-	results, err := scheduler.Tick(time.Now())
+	results, err := scheduler.Tick(time.Now().Add(2 * time.Second))
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
@@ -147,8 +178,7 @@ func TestFailingScriptIsRecorded(t *testing.T) {
 	mustScript(t, scripts, "boom", `function main(){ throw new Error("nope") }`)
 	mustJob(t, reg, cron.Job{Name: "breaks", Schedule: "@every 1s", Script: "boom"})
 
-	time.Sleep(1100 * time.Millisecond)
-	results, err := scheduler.Tick(time.Now())
+	results, err := scheduler.Tick(time.Now().Add(2 * time.Second))
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
@@ -172,9 +202,7 @@ func TestJobWithABrokenScheduleIsDisabled(t *testing.T) {
 	if err := reg.SetScheduleForTest("rotten", "nonsense"); err != nil {
 		t.Fatalf("SetScheduleForTest: %v", err)
 	}
-	time.Sleep(1100 * time.Millisecond)
-
-	results, err := scheduler.Tick(time.Now())
+	results, err := scheduler.Tick(time.Now().Add(2 * time.Second))
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}

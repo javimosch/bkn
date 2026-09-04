@@ -9,6 +9,25 @@ or S3), `events` (append-only log), `cron` (scheduled scripts), and `script`
 (sandboxed JavaScript over all of them) — on embedded SQLite. The CLI is the
 primary interface; HTTP mirrors it.
 
+## North star
+
+bkn should make a complex system **smaller**, not merely possible. The bar is
+not "could this app run on bkn" but "would this app be *less code* on bkn". An
+application bkn cannot serve is a gap to close, not a boundary to defend.
+
+The admission rule that keeps that ambition from rebuilding superbackend:
+
+> **Admit a primitive that removes a class of application code from every
+> embedder. Refuse a query feature that only moves application code into bkn.**
+
+Atomic field updates remove read-modify-write races from every concurrent
+writer — admit. Joins move query composition into bkn and remove nothing —
+refuse, denormalize, and pay the write amplification knowingly.
+
+When this and rule 2 disagree, this wins. The six-verb line is where the
+surface sits today, not a promise that it never moves. What it must never
+become is a query language.
+
 ## The rules that shape the code
 
 1. **Small on purpose.** This replaces an 85k-line Node backend whose feature
@@ -25,7 +44,8 @@ primary interface; HTTP mirrors it.
    content API genuinely needs ordering and ranges and doing them in a script
    means loading the collection into the VM. That is the whole allowance: no
    `$or`, no regex, no nesting, no joins, no multi-field sort, no aggregation.
-   Anything past it belongs in a script.
+   Anything past it belongs in a script — unless it clears the admission rule
+   in **North star** above, which is the only way this line moves.
 3. **Single writer.** `bkn` owns its SQLite file. Nothing else opens it. The
    previous system's consumers bypassed the API and opened Mongo directly,
    which froze the data model permanently.

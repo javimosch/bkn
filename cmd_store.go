@@ -137,13 +137,29 @@ func cmdStore(args []string) {
 
 	case "patch":
 		fs := flag.NewFlagSet("store patch", flag.ExitOnError)
-		data := fs.String("data", "", "JSON object of fields to merge")
+		data := fs.String("data", "", "JSON object of fields to merge; a field may be an operator such as {\"$inc\":1}")
+		var conds, absent repeated
+		fs.Var(&conds, "if", "precondition, repeatable and ANDed: field=value")
+		fs.Var(&absent, "if-absent", "field must be missing, null or empty; repeatable")
 		pos := parseFlags(fs, rest)
 		need(pos, 2, "bkn store patch <ns/coll> <id> --data <json>")
 		if *data == "" {
 			out.Fail(out.ValidationError, "missing_data", "--data is required")
 		}
-		rec, err := st.Patch(parseRef(pos[0]), pos[1], readData(*data))
+		opts := store.PatchOptions{IfAbsent: absent}
+		for _, c := range conds {
+			field, want, ok := strings.Cut(c, "=")
+			if !ok || field == "" {
+				out.Fail(out.InvalidValue, "invalid_precondition",
+					"--if must be field=value, got "+c,
+					`bkn store patch app/runs r1 --data '{"status":"done"}' --if status=running`)
+			}
+			if opts.If == nil {
+				opts.If = map[string]string{}
+			}
+			opts.If[field] = want
+		}
+		rec, err := st.PatchWith(parseRef(pos[0]), pos[1], readData(*data), opts)
 		if err != nil {
 			failStore(err)
 		}

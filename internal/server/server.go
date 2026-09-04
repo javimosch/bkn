@@ -382,9 +382,27 @@ func (s *Server) storePatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
 		return
 	}
-	rec, err := s.st.Patch(ref, r.PathValue("id"), fields)
+	// Preconditions mirror the CLI's --if / --if-absent. They live in the
+	// query rather than the body so the body stays exactly the patch.
+	opts := store.PatchOptions{IfAbsent: r.URL.Query()["if-absent"]}
+	for _, cond := range r.URL.Query()["if"] {
+		field, want, ok := strings.Cut(cond, "=")
+		if !ok || field == "" {
+			writeErr(w, http.StatusBadRequest, "validation_error", "if must be field=value, got "+cond)
+			return
+		}
+		if opts.If == nil {
+			opts.If = map[string]string{}
+		}
+		opts.If[field] = want
+	}
+	rec, err := s.st.PatchWith(ref, r.PathValue("id"), fields, opts)
 	if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrNoCollection) {
 		writeErr(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrPrecondition) || errors.Is(err, store.ErrConcurrent) {
+		writeErr(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
 	if err != nil {

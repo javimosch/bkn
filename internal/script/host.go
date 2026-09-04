@@ -104,8 +104,10 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 			}
 			return map[string]any(rec)
 		},
-		"patch": func(refStr, id string, fields map[string]any) any {
-			rec, err := r.st.Patch(ref(refStr), id, fields)
+		// The 4th argument is optional: {if: {field: "value"}, ifAbsent: ["field"]}.
+		// Operators such as {$inc: 1} need nothing extra - they ride in fields.
+		"patch": func(refStr, id string, fields map[string]any, opts map[string]any) any {
+			rec, err := r.st.PatchWith(ref(refStr), id, fields, patchOptions(opts))
 			if errors.Is(err, store.ErrNotFound) {
 				return nil
 			}
@@ -510,4 +512,35 @@ func guardedTransport() *http.Transport {
 func isPrivate(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// patchOptions converts the script-facing options object into PatchOptions.
+// Anything unrecognised is ignored rather than rejected: a script passing a
+// stray key should not fail a write it otherwise described correctly.
+func patchOptions(opts map[string]any) store.PatchOptions {
+	var out store.PatchOptions
+	if opts == nil {
+		return out
+	}
+	if conds, ok := opts["if"].(map[string]any); ok {
+		for field, want := range conds {
+			if out.If == nil {
+				out.If = map[string]string{}
+			}
+			out.If[field] = fmt.Sprintf("%v", want)
+		}
+	}
+	switch absent := opts["ifAbsent"].(type) {
+	case []any:
+		for _, f := range absent {
+			if name, ok := f.(string); ok {
+				out.IfAbsent = append(out.IfAbsent, name)
+			}
+		}
+	case []string:
+		out.IfAbsent = append(out.IfAbsent, absent...)
+	case string:
+		out.IfAbsent = append(out.IfAbsent, absent)
+	}
+	return out
 }

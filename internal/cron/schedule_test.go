@@ -139,3 +139,26 @@ func TestScheduleRoundTripsItsText(t *testing.T) {
 		}
 	}
 }
+
+// An `@every` job must never be scheduled sooner than its interval. Stored
+// times have second resolution, so rounding the next run down put it inside
+// the current second: at :01.999 an `@every 1s` job was scheduled 1ms later
+// and then re-fired for the rest of that second.
+func TestEveryNeverSchedulesEarly(t *testing.T) {
+	for _, spec := range []string{"@every 1s", "@every 5s", "@every 1m"} {
+		s, err := Parse(spec)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", spec, err)
+		}
+		for _, ms := range []int{0, 1, 100, 500, 900, 999} {
+			when := time.Date(2026, 1, 1, 10, 0, 1, ms*1e6, time.UTC)
+			next := s.Next(when)
+			if gap := next.Sub(when); gap < s.every {
+				t.Errorf("%s at .%03d: next is %v away, want at least %v", spec, ms, gap, s.every)
+			}
+			if !next.Equal(next.Truncate(time.Second)) {
+				t.Errorf("%s at .%03d: next %v is not second-aligned, so stamp() rounds it into the past", spec, ms, next)
+			}
+		}
+	}
+}

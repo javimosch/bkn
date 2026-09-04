@@ -173,7 +173,17 @@ func (s Schedule) matches(t time.Time) bool {
 // schedule cannot fire within four years (e.g. "0 0 30 2 *").
 func (s Schedule) Next(t time.Time) time.Time {
 	if s.every > 0 {
-		return t.Add(s.every).Truncate(time.Second)
+		next := t.Add(s.every)
+		// Stored times have second resolution (stamp() formats RFC3339), so a
+		// sub-second next-run is written as the *start* of its second. Rounding
+		// down would land up to 999ms before the interval actually elapsed: an
+		// `@every 1s` job ticked at :01.999 would be scheduled for :02.000 and
+		// fire again 1ms later, then keep firing for the rest of that second.
+		// Round up instead — firing late is harmless, firing early is a bug.
+		if trunc := next.Truncate(time.Second); trunc.Before(next) {
+			return trunc.Add(time.Second)
+		}
+		return next
 	}
 	// Start at the next whole minute; cron has minute resolution.
 	next := t.Truncate(time.Minute).Add(time.Minute)

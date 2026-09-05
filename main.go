@@ -160,6 +160,16 @@ func failStore(err error) {
 		out.Fail(out.InvalidArguments, "invalid_ref", err.Error(), "bkn store put myapp/users --data '{}'")
 	case errors.Is(err, store.ErrBadDoc):
 		out.Fail(out.ValidationError, "invalid_document", err.Error())
+	case errors.Is(err, store.ErrPrecondition):
+		out.Fail(out.Conflict, "precondition_failed", err.Error(),
+			"bkn store get <ns/coll> <id>")
+	case errors.Is(err, store.ErrConcurrent):
+		out.Fail(out.Conflict, "concurrent_update", err.Error())
+	case errors.Is(err, store.ErrBadOperator):
+		out.Fail(out.InvalidValue, "invalid_operator", err.Error(),
+			"valid operators: "+strings.Join(store.Operators(), ", "))
+	case errors.Is(err, store.ErrOperandType):
+		out.Fail(out.ValidationError, "invalid_operand", err.Error())
 	case errors.Is(err, store.ErrBadNormalizer):
 		out.Fail(out.InvalidValue, "invalid_normalizer", err.Error(),
 			"valid normalizers: "+strings.Join(store.ValidNormalizers(), ", "))

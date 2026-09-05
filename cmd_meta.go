@@ -66,7 +66,7 @@ func helpJSON() map[string]any {
 			"store get":          c([]string{"ref", "id"}, none),
 			"store find":         c([]string{"ref"}, []string{"--where <predicate>"}),
 			"store list":         c([]string{"ref"}, []string{"--where <predicate>", "--order-by <field[:desc]>", "--limit <n>", "--offset <n>"}),
-			"store patch":        c([]string{"ref", "id"}, []string{"--data <json|@file|->"}),
+			"store patch":        c([]string{"ref", "id"}, []string{"--data <json|@file|->", "--if <field=value>", "--if-absent <field>"}),
 			"store delete":       c([]string{"ref", "id"}, none),
 			"store collections":  c(none, []string{"--ns <namespace>"}),
 			"kv get":             c([]string{"key"}, none),
@@ -197,7 +197,7 @@ func printHelp() {
     bkn store get <ns/coll> <id>
     bkn store find <ns/coll> --where field=value
     bkn store list <ns/coll> [--where <predicate>] [--order-by field:desc] [--limit N]
-    bkn store patch <ns/coll> <id> --data <json>
+    bkn store patch <ns/coll> <id> --data <json> [--if field=value] [--if-absent field]
     bkn store delete <ns/coll> <id>
     bkn store collections [--ns <namespace>]
 

@@ -118,6 +118,51 @@ how many exceed what `store` offers:
 The large one is the informative one: of its 33 outliers, only the 8 joins and
 2 subqueries are relational. The rest is atomicity and summarisation.
 
+## Writes that do not lose each other
+
+`patch` used to read a document, merge in Go, and write the whole thing back.
+Two concurrent patches of different fields kept only one of them — 16 concurrent
+increments landed as `1`, and every contender for a job "won" it.
+
+A patch field may now be an operator, computed from the field's current value:
+
+```sh
+bkn store patch app/runs r1 --data '{
+  "tries":  {"$inc": 1},
+  "log":    {"$append": "started\n"},
+  "stages": {"$push": "build"},
+  "worker": {"$setIfEmpty": "w1"}
+}'
+```
+
+The write is a compare-and-set against the exact document the merge was computed
+from, retried on a lost race — so concurrent patches accumulate instead of
+erasing each other, across processes and not merely within one. A missing field
+is the operator's identity: incrementing an absent counter yields the operand.
+A plain object is still a plain value; only a single `$`-prefixed key is an
+operator.
+
+Preconditions guard a write, and are how one worker claims a job:
+
+```sh
+bkn store patch app/runs r1 --data '{"status":"done"}'  --if status=running
+bkn store patch app/runs r1 --data '{"worker":"w1"}'    --if-absent worker
+```
+
+Conditions are ANDed and checked against the document being written; a failed
+one writes nothing and exits `95` (`precondition_failed`). There is deliberately
+no `OR`, matching the query surface — an either/or guard belongs in your control
+flow, not in a predicate language growing inside bkn. The same options are query
+parameters over HTTP (`?if=status=running`, `?if-absent=worker`, `409` on
+failure) and an optional fourth argument in scripts.
+
+These are primitives, not query features, by the test in
+[VISION.md](VISION.md#what-gets-in): they remove read-modify-write races from
+every caller, and userland cannot implement them safely — a script that reads,
+adds one and writes back *is* the race. The core needed them first: cron's
+`claim()` compare-and-sets a job's next run in one `UPDATE` for exactly this
+reason, and applications had no way to say the same thing.
+
 ## Identity, without billing
 
 `auth` holds users, organizations, memberships and tokens. Emails are

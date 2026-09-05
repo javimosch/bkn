@@ -406,7 +406,27 @@ func (s *Store) Count(r Ref, filters []Filter) (int, error) {
 // Patch shallow-merges fields into an existing document ($set semantics).
 // Nested objects are replaced wholesale, not deep-merged - the observed
 // consumers only ever set top-level fields.
+//
+// A field value may instead be an operator expression such as {"$inc": 1} or
+// {"$append": "line\n"}, which is computed from the field's current value.
+// See atomic.go for why those exist.
 func (s *Store) Patch(r Ref, id string, fields map[string]any) (Record, error) {
+	return s.PatchWith(r, id, fields, PatchOptions{})
+}
+
+// patchAttempts bounds the compare-and-set retry. Contention on one document
+// is expected to be rare; a document hot enough to lose five races in a row is
+// a design problem in the caller, and reporting that beats spinning.
+const patchAttempts = 5
+
+// PatchWith is Patch with preconditions.
+//
+// The write is a compare-and-set against the exact document the merge was
+// computed from, so a concurrent writer cannot be silently overwritten - which
+// is what the previous read-merge-write did. On a lost race the document is
+// re-read and the merge recomputed, so two patches of different fields both
+// survive instead of one erasing the other.
+func (s *Store) PatchWith(r Ref, id string, fields map[string]any, opts PatchOptions) (Record, error) {
 	if fields == nil {
 		return nil, ErrBadDoc
 	}
@@ -414,31 +434,73 @@ func (s *Store) Patch(r Ref, id string, fields map[string]any) (Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	cur, err := s.Get(r, id)
-	if err != nil {
-		return nil, err
-	}
-	doc := map[string]any(cur)
-	delete(doc, "id")
-	for k, v := range fields {
-		if k == "id" {
-			continue // ids are immutable; use Put with a new id instead
+
+	for attempt := 0; attempt < patchAttempts; attempt++ {
+		var prev string
+		err := s.db.QueryRow(`SELECT doc FROM records WHERE ns=? AND coll=? AND id=?`,
+			r.NS, r.Coll, id).Scan(&prev)
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
 		}
-		doc[k] = v
+		if err != nil {
+			return nil, err
+		}
+		cur, err := decode(id, prev)
+		if err != nil {
+			return nil, err
+		}
+		doc := map[string]any(cur)
+		delete(doc, "id")
+
+		if !opts.empty() {
+			if err := opts.check(doc); err != nil {
+				return nil, err
+			}
+		}
+
+		for k, v := range fields {
+			if k == "id" {
+				continue // ids are immutable; use Put with a new id instead
+			}
+			if op, operand, isOp := asOperator(v); isOp {
+				next, err := applyOperator(op, doc[k], operand)
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", k, err)
+				}
+				doc[k] = next
+				continue
+			}
+			doc[k] = v
+		}
+		if err := applyNormalizers(c.Normalize, doc); err != nil {
+			return nil, err
+		}
+		b, err := json.Marshal(doc)
+		if err != nil {
+			return nil, ErrBadDoc
+		}
+
+		// Only write if the document is still the one we merged into. This is
+		// the same compare-and-set cron's claim() uses, and it is what makes
+		// the operators above atomic across processes rather than merely
+		// convenient within one.
+		res, err := s.db.Exec(
+			`UPDATE records SET doc=?, updated_at=? WHERE ns=? AND coll=? AND id=? AND doc=?`,
+			string(b), time.Now().UTC().Format(time.RFC3339), r.NS, r.Coll, id, prev)
+		if err != nil {
+			return nil, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if n == 1 {
+			return decode(id, string(b))
+		}
+		// Somebody else wrote between the read and the write: read again and
+		// recompute, so an operator applies to the value that actually won.
 	}
-	if err := applyNormalizers(c.Normalize, doc); err != nil {
-		return nil, err
-	}
-	b, err := json.Marshal(doc)
-	if err != nil {
-		return nil, ErrBadDoc
-	}
-	_, err = s.db.Exec(`UPDATE records SET doc=?, updated_at=? WHERE ns=? AND coll=? AND id=?`,
-		string(b), time.Now().UTC().Format(time.RFC3339), r.NS, r.Coll, id)
-	if err != nil {
-		return nil, err
-	}
-	return decode(id, string(b))
+	return nil, ErrConcurrent
 }
 
 // Delete removes one document by id.

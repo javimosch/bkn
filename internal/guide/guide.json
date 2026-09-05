@@ -52,7 +52,9 @@
     "lock": "An expiring lease held under a key, used to stop two runs of the same work overlapping across processes. acquire returns an owner token, or null when somebody else holds it; only that owner can release or renew.",
     "hook origin": "A hook accepts cross-origin browser requests only from the origins in its allow_origin list; the preflight is refused otherwise. A provider webhook needs none, a form posted from a page needs its site listed.",
     "ordering": "store list sorts by a document field with --order-by <field> or <field>:desc, and by recency when omitted. Records missing the field sort last in both directions.",
-    "content-hash version": "The version is sha256[:12] of the binary itself, so there is no number to bump: identical bytes are the same version and a rebuild that changes nothing triggers no update."
+    "content-hash version": "The version is sha256[:12] of the binary itself, so there is no number to bump: identical bytes are the same version and a rebuild that changes nothing triggers no update.",
+    "atomic_updates": "A patch field may be an operator instead of a value: {\"$inc\":1}, {\"$append\":\"line\\n\"}, {\"$push\":\"item\"}, {\"$setIfEmpty\":\"w1\"}. The new value is computed from the current one and written under compare-and-set, so concurrent patches do not lose each other's updates. A plain object is still a plain value; only a single $-prefixed key is an operator.",
+    "preconditions": "store patch --if field=value and --if-absent field are checked against the document being written and are ANDed. A failed precondition writes nothing and exits 95 (precondition_failed). --if-absent claims a field exactly once, which is how one worker takes a job. There is no OR, matching the query surface."
   },
   "commands": {
     "store": [
@@ -61,7 +63,7 @@
       "bkn store get <ns/coll> <id>",
       "bkn store find <ns/coll> --where <predicate>",
       "bkn store list <ns/coll> [--where <predicate>] [--order-by <field[:asc|:desc]>] [--limit <n>] [--offset <n>]",
-      "bkn store patch <ns/coll> <id> --data <json|@file|->",
+      "bkn store patch <ns/coll> <id> --data <json|@file|-> [--if field=value] [--if-absent field]",
       "bkn store delete <ns/coll> <id>",
       "bkn store collections [--ns <namespace>]"
     ],

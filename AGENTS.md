@@ -58,6 +58,42 @@ When this and rule 2 disagree, this wins.
    script can reach is in `internal/script/host.go`. Keep it that way; a
    capability added anywhere else is a capability nobody will audit.
 
+## Deliberate omissions
+
+Each of these was asked for by a real codebase and refused on purpose. Refusing
+is how the admission rule earns its keep — a rule that only ever admits is not a
+rule. If you are about to add one of these, the burden is to show it removes
+application code from every embedder rather than moving a query into bkn.
+
+**No transactions.** There is no `Begin`, and none is planned. Every write that
+must be atomic is one statement: cron's `claim()` compare-and-sets a job's next
+run, `patch` compare-and-sets the document its merge was computed from,
+retention evicts in one `DELETE`, a rollup counts in one `GROUP BY`. The deeper
+reason is that a transaction is caller-held state, and this surface has nowhere
+to hold it: the CLI is one-shot and HTTP is stateless, so `bkn store begin` has
+no meaning between two invocations. Where mutual exclusion genuinely spans
+several statements, that is what `locks` is — an expiring lease that works
+across processes. If a need ever survives both of those, the primitive-shaped
+answer is a `batch` of writes applied all-or-nothing, not a session.
+
+**No joins.** The answer is denormalization: embed the display name in the
+document and pay the write amplification knowingly. Admitting joins is where
+bkn becomes SQL.
+
+**No regex or `LIKE`.** A substring guard is usually a flag field that was never
+written down; `$append` plus a boolean replaced the one real instance found.
+
+**No multi-field sort.** `--order-by` takes one field because ordering is
+already *total*: `orderClause` appends `id`, so pages are stable and a tiebreak
+never has to be asked for. That covered three of the four multi-field orderings
+found in the wild. The fourth was `ORDER BY tier, name` — presentation, not
+correctness — and is a caller's concern.
+
+**No age-based retention.** `--retain-last` is count-based because that is what
+was actually measured, and `events prune --older-than` already covers the
+log-shaped case. A second policy shape with no evidence behind it is how a core
+grows.
+
 ## Spec conformance is not optional
 
 Every command follows <https://cli-specs.intrane.fr>: cli-output-spec,

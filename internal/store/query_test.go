@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/javimosch/bkn/internal/store"
@@ -295,5 +297,53 @@ func TestFilterByID(t *testing.T) {
 	total, err := s.Count(r, []store.Filter{many})
 	if err != nil || total != 2 {
 		t.Errorf("Count = %d, %v, want 2", total, err)
+	}
+}
+
+// Ordering must be total, or pagination is unreliable: with ties broken
+// arbitrarily, two pages of the same query can repeat a document and skip
+// another. orderClause appends id for exactly this reason, and this pins it —
+// it is what lets `--order-by` stay a single field.
+func TestOrderingIsTotalSoPaginationIsStable(t *testing.T) {
+	st := newStore(t)
+	r := ref(t, "app/ties")
+	for i := 0; i < 30; i++ {
+		// Every document shares one sort value, so only the tiebreak decides.
+		if _, err := st.Put(r, fmt.Sprintf("d%02d", i), map[string]any{"tier": "same", "n": i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page := func(offset int) []string {
+		recs, err := st.List(r, store.ListOptions{OrderBy: "tier", Limit: 10, Offset: offset})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		out := make([]string, 0, len(recs))
+		for _, rec := range recs {
+			out = append(out, rec["id"].(string))
+		}
+		return out
+	}
+
+	// The same query twice must give the same answer.
+	if a, b := page(0), page(0); !slices.Equal(a, b) {
+		t.Errorf("repeating one query changed the order:\n %v\n %v", a, b)
+	}
+
+	// Three pages must cover all 30 documents exactly once.
+	seen := map[string]int{}
+	for _, offset := range []int{0, 10, 20} {
+		for _, id := range page(offset) {
+			seen[id]++
+		}
+	}
+	if len(seen) != 30 {
+		t.Errorf("paging saw %d distinct documents, want 30", len(seen))
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("%s appeared %d times across pages, want once", id, n)
+		}
 	}
 }

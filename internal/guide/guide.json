@@ -55,7 +55,8 @@
     "content-hash version": "The version is sha256[:12] of the binary itself, so there is no number to bump: identical bytes are the same version and a rebuild that changes nothing triggers no update.",
     "atomic_updates": "A patch field may be an operator instead of a value: {\"$inc\":1}, {\"$append\":\"line\\n\"}, {\"$push\":\"item\"}, {\"$setIfEmpty\":\"w1\"}. The new value is computed from the current one and written under compare-and-set, so concurrent patches do not lose each other's updates. A plain object is still a plain value; only a single $-prefixed key is an operator.",
     "preconditions": "store patch --if field=value and --if-absent field are checked against the document being written and are ANDed. A failed precondition writes nothing and exits 95 (precondition_failed). --if-absent claims a field exactly once, which is how one worker takes a job. There is no OR, matching the query surface.",
-    "retention": "A collection may declare a bound: --retain-last N keeps the newest N documents, and --retain-per <field> gives each distinct value of that field its own N. The store enforces it on every write and when the policy is declared, so no caller writes a trim query and nothing has to be scheduled. Ordering is created_at then insertion order. No bound means unbounded; --retain-per without --retain-last is rejected because it would enforce nothing."
+    "retention": "A collection may declare a bound: --retain-last N keeps the newest N documents, and --retain-per <field> gives each distinct value of that field its own N. The store enforces it on every write and when the policy is declared, so no caller writes a trim query and nothing has to be scheduled. Ordering is created_at then insertion order. No bound means unbounded; --retain-per without --retain-last is rejected because it would enforce nothing.",
+    "rollup": "store count answers how many, not which. With --by <field> it returns one bucket per distinct value, largest first, alongside total (documents matching) and groups (distinct values before any limit) so truncation is visible. A document with no value for the field gets a null key, which is different from an empty string. It composes with --where, so the filter applies before the grouping. One field, one aggregate: no expressions, no having, no joins, and it never returns documents."
   },
   "commands": {
     "store": [
@@ -64,6 +65,7 @@
       "bkn store get <ns/coll> <id>",
       "bkn store find <ns/coll> --where <predicate>",
       "bkn store list <ns/coll> [--where <predicate>] [--order-by <field[:asc|:desc]>] [--limit <n>] [--offset <n>]",
+      "bkn store count <ns/coll> [--where <predicate>] [--by <field>]",
       "bkn store patch <ns/coll> <id> --data <json|@file|-> [--if field=value] [--if-absent field]",
       "bkn store delete <ns/coll> <id>",
       "bkn store collections [--ns <namespace>]"

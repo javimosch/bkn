@@ -300,7 +300,7 @@ func (s *Server) storeList(w http.ResponseWriter, r *http.Request) {
 	var filters []store.Filter
 	for field, vals := range q {
 		switch field {
-		case "limit", "offset", "order_by", "order":
+		case "limit", "offset", "order_by", "order", "by", "by_limit":
 			continue
 		}
 		// A query parameter may carry an operator: ?price=gt:20
@@ -314,6 +314,28 @@ func (s *Server) storeList(w http.ResponseWriter, r *http.Request) {
 		}
 		filters = append(filters, f)
 	}
+	// ?by=<field> asks a different question of the same collection: how many
+	// documents in each group, rather than which documents. The reserved
+	// parameter names above already work this way for limit and order_by.
+	if by := q.Get("by"); by != "" {
+		byLimit, _ := strconv.Atoi(q.Get("by_limit"))
+		rollup, err := s.st.CountBy(ref, filters, by, byLimit)
+		if errors.Is(err, store.ErrBadGroupBy) {
+			writeErr(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "storage_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "collection": ref.String(), "by": rollup.By,
+			"total": rollup.Total, "groups": rollup.Groups,
+			"truncated": rollup.Truncated(), "buckets": rollup.Buckets,
+		})
+		return
+	}
+
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
 

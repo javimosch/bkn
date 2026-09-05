@@ -271,6 +271,12 @@ func (s *Store) Put(r Ref, id string, doc map[string]any) (Record, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A bounded collection is trimmed after the write, so it is never above
+	// its bound for longer than one statement and the document just written
+	// is always the one kept.
+	if _, err := s.enforce(r, c, doc); err != nil {
+		return nil, err
+	}
 	return decode(id, string(b))
 }
 
@@ -307,6 +313,9 @@ func (s *Store) PutIfAbsent(r Ref, id string, doc map[string]any) (Record, bool,
 	if n, _ := res.RowsAffected(); n == 0 {
 		existing, err := s.Get(r, id)
 		return existing, false, err
+	}
+	if _, err := s.enforce(r, c, doc); err != nil {
+		return nil, false, err
 	}
 	rec, err := decode(id, string(b))
 	return rec, true, err

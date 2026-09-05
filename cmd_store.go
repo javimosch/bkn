@@ -29,10 +29,12 @@ func cmdStore(args []string) {
 	switch sub {
 	case "create":
 		fs := flag.NewFlagSet("store create", flag.ExitOnError)
-		var norms repeated
+		var norms, retainPer repeated
 		fs.Var(&norms, "normalize", "field=rule, repeatable ("+strings.Join(store.ValidNormalizers(), "|")+")")
+		fs.Var(&retainPer, "retain-per", "partition the bound by this field, repeatable or comma-separated")
+		retainLast := fs.String("retain-last", "", "keep at most N documents, newest first; 0 removes the bound")
 		pos := parseFlags(fs, rest)
-		need(pos, 1, "bkn store create <ns/coll> [--normalize field=rule]")
+		need(pos, 1, "bkn store create <ns/coll> [--normalize field=rule] [--retain-last N [--retain-per field]]")
 
 		rules := map[string]string{}
 		for _, n := range norms {
@@ -42,7 +44,12 @@ func cmdStore(args []string) {
 			}
 			rules[f] = r
 		}
-		c, err := st.EnsureCollection(parseRef(pos[0]), rules)
+		setRetain := *retainLast != "" || len(retainPer) > 0
+		retain, err := store.ParseRetention(*retainLast, retainPer)
+		if err != nil {
+			failStore(err)
+		}
+		c, err := st.EnsureCollectionWith(parseRef(pos[0]), rules, retain, setRetain)
 		if err != nil {
 			failStore(err)
 		}

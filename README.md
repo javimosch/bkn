@@ -163,6 +163,44 @@ adds one and writes back *is* the race. The core needed them first: cron's
 `claim()` compare-and-sets a job's next run in one `UPDATE` for exactly this
 reason, and applications had no way to say the same thing.
 
+## Collections that bound themselves
+
+An unbounded log table is a disk-space incident waiting to happen, so every
+codebase grows a trim query and a job to run it. One 131k-line control plane
+ran this twice:
+
+```sql
+DELETE FROM repo_memories WHERE tag=? AND repo_id=? AND user_id=?
+  AND id NOT IN (SELECT id FROM repo_memories WHERE tag=? AND repo_id=?
+                 AND user_id=? ORDER BY created_at DESC LIMIT ?)
+```
+
+Declare the bound on the collection instead:
+
+```sh
+bkn store create app/runs     --retain-last 500
+bkn store create app/memories --retain-last 20 --retain-per tag,repo_id,user_id
+```
+
+`--retain-last N` keeps the newest N documents. `--retain-per` gives each
+distinct value of those fields its own N, which is what the query above was
+doing by hand. The store enforces the bound on every write and again the moment
+the policy is declared, so a bound set on a collection that already holds a
+million rows applies immediately rather than at the next write.
+
+That deletes two things from every caller: the query, and the schedule that ran
+it. No bound means unbounded, exactly as before. `--retain-per` without
+`--retain-last` is rejected rather than accepted-and-ignored — a policy that
+reads like a policy and enforces nothing is worse than no policy.
+
+Ordering is `created_at`, then insertion order. The tiebreak matters because
+timestamps have second resolution: without it, documents written in the same
+second would be evicted arbitrarily.
+
+Retention is declared on the collection, so it is set from the CLI, like
+`--normalize`. There is no HTTP endpoint for creating collections yet, which
+means an HTTP-only consumer cannot declare one — see [Status](#status).
+
 ## Identity, without billing
 
 `auth` holds users, organizations, memberships and tokens. Emails are

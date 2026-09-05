@@ -15,10 +15,12 @@ import (
 
 const schema = `
 CREATE TABLE IF NOT EXISTS collections (
-  ns         TEXT NOT NULL,
-  name       TEXT NOT NULL,
-  normalize  TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
+  ns          TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  normalize   TEXT NOT NULL DEFAULT '{}',
+  retain_last INTEGER NOT NULL DEFAULT 0,
+  retain_per  TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
   PRIMARY KEY (ns, name)
 );
 
@@ -32,6 +34,7 @@ CREATE TABLE IF NOT EXISTS records (
   PRIMARY KEY (ns, coll, id)
 );
 CREATE INDEX IF NOT EXISTS records_ns_coll ON records(ns, coll, updated_at DESC);
+CREATE INDEX IF NOT EXISTS records_ns_coll_created ON records(ns, coll, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS locks (
   key        TEXT PRIMARY KEY,
@@ -227,6 +230,8 @@ func Open() (*sql.DB, error) {
 var addedColumns = []string{
 	`ALTER TABLE hooks ADD COLUMN allow_origin TEXT NOT NULL DEFAULT '[]'`,
 	`ALTER TABLE hooks ADD COLUMN rate_limit INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE collections ADD COLUMN retain_last INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE collections ADD COLUMN retain_per TEXT NOT NULL DEFAULT ''`,
 }
 
 func addColumns(conn *sql.DB) error {

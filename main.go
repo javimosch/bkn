@@ -170,6 +170,9 @@ func failStore(err error) {
 			"valid operators: "+strings.Join(store.Operators(), ", "))
 	case errors.Is(err, store.ErrOperandType):
 		out.Fail(out.ValidationError, "invalid_operand", err.Error())
+	case errors.Is(err, store.ErrBadRetention):
+		out.Fail(out.InvalidValue, "invalid_retention", err.Error(),
+			"bkn store create app/runs --retain-last 500 --retain-per tag")
 	case errors.Is(err, store.ErrBadNormalizer):
 		out.Fail(out.InvalidValue, "invalid_normalizer", err.Error(),
 			"valid normalizers: "+strings.Join(store.ValidNormalizers(), ", "))

@@ -8,7 +8,7 @@ import (
 	"github.com/javimosch/bkn/internal/store"
 )
 
-const storeUsage = "bkn store <create|put|get|find|list|patch|delete|collections> ..."
+const storeUsage = "bkn store <create|put|get|find|list|count|patch|delete|collections> ..."
 
 func cmdStore(args []string) {
 	need(args, 1, storeUsage)
@@ -140,6 +140,34 @@ func cmdStore(args []string) {
 			"offset":     *offset,
 			"order_by":   *orderBy,
 			"records":    recs,
+		})
+
+	case "count":
+		fs := flag.NewFlagSet("store count", flag.ExitOnError)
+		var wheres repeated
+		fs.Var(&wheres, "where", "predicate, repeatable: field=value, field>value, field:in=a,b")
+		by := fs.String("by", "", "group by this document field; omit for a plain total")
+		limit := fs.Int("limit", store.DefaultRollupLimit, "maximum buckets returned")
+		pos := parseFlags(fs, rest)
+		need(pos, 1, "bkn store count <ns/coll> [--where field=value] [--by field]")
+
+		ref := parseRef(pos[0])
+		filters := parseFilters(wheres)
+		if *by == "" {
+			total, err := st.Count(ref, filters)
+			if err != nil {
+				failStore(err)
+			}
+			out.Data(map[string]any{"collection": ref.String(), "total": total})
+			return
+		}
+		rollup, err := st.CountBy(ref, filters, *by, *limit)
+		if err != nil {
+			failStore(err)
+		}
+		out.Data(map[string]any{
+			"collection": ref.String(), "by": rollup.By, "total": rollup.Total,
+			"groups": rollup.Groups, "truncated": rollup.Truncated(), "buckets": rollup.Buckets,
 		})
 
 	case "patch":

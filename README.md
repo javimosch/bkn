@@ -163,6 +163,45 @@ adds one and writes back *is* the race. The core needed them first: cron's
 `claim()` compare-and-sets a job's next run in one `UPDATE` for exactly this
 reason, and applications had no way to say the same thing.
 
+## How many, not which
+
+A control plane's first dashboard question is a rollup:
+
+```sql
+SELECT status, COUNT(*) FROM explore_candidates
+ WHERE repo_id=? AND user_id=? GROUP BY status
+```
+
+```sh
+bkn store count app/runs --where repo_id=7 --by status
+```
+
+```json
+{"by":"status","total":41,"groups":3,"truncated":false,
+ "buckets":[{"key":"ok","count":30},{"key":"failed","count":8},{"key":"stale","count":3}]}
+```
+
+Without `--by` it is a plain total. With it, one bucket per distinct value,
+largest first — the same shape and ordering `events stats --by` already uses,
+because a store is no less entitled to a rollup than a log is.
+
+`total` counts matching documents and `groups` counts distinct values *before*
+any limit, so truncation is visible rather than silent: a rollup on a
+high-cardinality field returns capped buckets and still tells you how many
+groups there really were. A document with no value for the field gets a `null`
+key, which is deliberately different from an empty string.
+
+The alternative was listing the collection and counting in the caller — which
+is precisely what rule 2 rejected when it admitted ordering and ranges, because
+doing them in a script means loading the collection into the VM. A rollup is
+admitted on the same ground, and stays a summarisation rather than a query
+language: one field, one aggregate, no expressions, no `HAVING`, no joins, and
+it never returns documents.
+
+Over HTTP the same question is `?by=status`, alongside the filters — `by` and
+`by_limit` join `limit` and `order_by` as reserved parameter names. In a script
+it is `bkn.store.countBy(ref, where, field)`.
+
 ## Collections that bound themselves
 
 An unbounded log table is a disk-space incident waiting to happen, so every

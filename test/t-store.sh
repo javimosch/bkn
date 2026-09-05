@@ -39,6 +39,20 @@ chk "precondition wrote nothing" "$(a "$B/v1/store/dog/products/widget" | py "r[
 chk "if-absent claims once"   "$(aj -X PATCH "$B/v1/store/dog/products/gizmo?if-absent=holder" -d '{"holder":"a"}' | py "r['holder']")" "a"
 chk "second claim -> 409"     "$(code -X PATCH "$B/v1/store/dog/products/gizmo?if-absent=holder" -d '{"holder":"b"}' -H 'Content-Type: application/json')" "409"
 
+
+# Rollups: how many documents in each group, without listing the collection.
+# By this point the precondition assertions above have moved widget to "sold",
+# so the four products hold four distinct statuses. Ties are ordered by key.
+b() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
+chk "group by status"        "$(a "$B/v1/store/dog/products?by=status" | b "','.join(str(x['key'])+'='+str(x['count']) for x in d['buckets'])")" "archived=1,draft=1,live=1,sold=1"
+chk "rollup total"           "$(a "$B/v1/store/dog/products?by=status" | b "d['total']")" "4"
+chk "rollup groups"          "$(a "$B/v1/store/dog/products?by=status" | b "d['groups']")" "4"
+chk "rollup + filter"        "$(a "$B/v1/store/dog/products?status=live&by=name" | b "d['total']")" "1"
+chk "absent field is null"   "$(a "$B/v1/store/dog/products?by=stock" | b "str(any(x['key'] is None for x in d['buckets'])).lower()")" "true"
+chk "by_limit truncates"     "$(a "$B/v1/store/dog/products?by=name&by_limit=2" | b "str(len(d['buckets']))+'/'+str(d['groups'])+'/'+str(d['truncated']).lower()")" "2/4/true"
+chk "bad group field -> 400" "$(code "$B/v1/store/dog/products?by=a%20b")" "400"
+chk "no by = records"        "$(a "$B/v1/store/dog/products" | b "'records' in d")" "True"
+
 chk "delete"                "$(code -X DELETE "$B/v1/store/dog/products/thing")" "200"
 chk "delete missing -> 404" "$(code -X DELETE "$B/v1/store/dog/products/thing")" "404"
 chk "after delete"          "$(a "$B/v1/store/dog/products" | python3 -c 'import json,sys;print(json.load(sys.stdin)["total"])')" "3"

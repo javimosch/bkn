@@ -133,6 +133,25 @@ func (r *Runner) newHost(vm *goja.Runtime, s Script, logs *strings.Builder) map[
 			}
 			return total
 		},
+		// countBy(ref, where, field) -> {by, total, groups, buckets}
+		"countBy": func(refStr string, where map[string]any, field string) any {
+			rollup, err := r.st.CountBy(ref(refStr), filtersFrom(where), field, 0)
+			if err != nil {
+				throw(err)
+			}
+			buckets := make([]any, 0, len(rollup.Buckets))
+			for _, b := range rollup.Buckets {
+				var key any
+				if b.Key != nil {
+					key = *b.Key
+				}
+				buckets = append(buckets, map[string]any{"key": key, "count": b.Count})
+			}
+			return map[string]any{
+				"by": rollup.By, "total": rollup.Total, "groups": rollup.Groups,
+				"truncated": rollup.Truncated(), "buckets": buckets,
+			}
+		},
 		"list": func(refStr string, opts map[string]any) []any {
 			listOpts := store.ListOptions{Limit: 50, Desc: true}
 			if opts != nil {

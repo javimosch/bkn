@@ -54,11 +54,12 @@
     "ordering": "store list sorts by a document field with --order-by <field> or <field>:desc, and by recency when omitted. Records missing the field sort last in both directions.",
     "content-hash version": "The version is sha256[:12] of the binary itself, so there is no number to bump: identical bytes are the same version and a rebuild that changes nothing triggers no update.",
     "atomic_updates": "A patch field may be an operator instead of a value: {\"$inc\":1}, {\"$append\":\"line\\n\"}, {\"$push\":\"item\"}, {\"$setIfEmpty\":\"w1\"}. The new value is computed from the current one and written under compare-and-set, so concurrent patches do not lose each other's updates. A plain object is still a plain value; only a single $-prefixed key is an operator.",
-    "preconditions": "store patch --if field=value and --if-absent field are checked against the document being written and are ANDed. A failed precondition writes nothing and exits 95 (precondition_failed). --if-absent claims a field exactly once, which is how one worker takes a job. There is no OR, matching the query surface."
+    "preconditions": "store patch --if field=value and --if-absent field are checked against the document being written and are ANDed. A failed precondition writes nothing and exits 95 (precondition_failed). --if-absent claims a field exactly once, which is how one worker takes a job. There is no OR, matching the query surface.",
+    "retention": "A collection may declare a bound: --retain-last N keeps the newest N documents, and --retain-per <field> gives each distinct value of that field its own N. The store enforces it on every write and when the policy is declared, so no caller writes a trim query and nothing has to be scheduled. Ordering is created_at then insertion order. No bound means unbounded; --retain-per without --retain-last is rejected because it would enforce nothing."
   },
   "commands": {
     "store": [
-      "bkn store create <ns/coll> [--normalize <field=rule>]",
+      "bkn store create <ns/coll> [--normalize <field=rule>] [--retain-last <n> [--retain-per <field>]]",
       "bkn store put <ns/coll> --data <json|@file|-> [--id <id>] [--if-absent]",
       "bkn store get <ns/coll> <id>",
       "bkn store find <ns/coll> --where <predicate>",

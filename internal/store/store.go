@@ -66,6 +66,7 @@ func (s *Store) Ping(ctx context.Context) error {
 type Collection struct {
 	Ref       string            `json:"ref"`
 	Normalize map[string]string `json:"normalize"`
+	Retain    Retention         `json:"retain,omitzero"`
 	CreatedAt string            `json:"created_at"`
 	Count     int               `json:"count,omitempty"`
 }
@@ -118,36 +119,70 @@ func applyNormalizers(rules map[string]string, doc map[string]any) error {
 // EnsureCollection creates the collection if absent and returns its rules.
 // Passing normalize rules on an existing collection updates them.
 func (s *Store) EnsureCollection(r Ref, rules map[string]string) (Collection, error) {
+	return s.EnsureCollectionWith(r, rules, Retention{}, false)
+}
+
+// EnsureCollectionWith also sets a retention policy. setRetain distinguishes
+// "no policy given" from "policy explicitly cleared", so an ordinary write -
+// which calls EnsureCollection - can never silently drop the bound somebody
+// declared.
+func (s *Store) EnsureCollectionWith(r Ref, rules map[string]string, retain Retention, setRetain bool) (Collection, error) {
 	for _, rule := range rules {
 		if _, err := normalize(rule, ""); err != nil {
 			return Collection{}, err
 		}
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if len(rules) > 0 {
-		b, _ := json.Marshal(rules)
-		_, err := s.db.Exec(`
-			INSERT INTO collections (ns, name, normalize, created_at) VALUES (?,?,?,?)
-			ON CONFLICT(ns, name) DO UPDATE SET normalize = excluded.normalize`,
-			r.NS, r.Coll, string(b), now)
-		if err != nil {
-			return Collection{}, err
-		}
-	} else {
-		_, err := s.db.Exec(`
-			INSERT INTO collections (ns, name, normalize, created_at) VALUES (?,?,'{}',?)
-			ON CONFLICT(ns, name) DO NOTHING`, r.NS, r.Coll, now)
-		if err != nil {
+	if setRetain {
+		if err := retain.Validate(); err != nil {
 			return Collection{}, err
 		}
 	}
-	return s.getCollection(r)
+	now := time.Now().UTC().Format(time.RFC3339)
+	b := []byte("{}")
+	if len(rules) > 0 {
+		b, _ = json.Marshal(rules)
+	}
+
+	sets := []string{}
+	if len(rules) > 0 {
+		sets = append(sets, "normalize = excluded.normalize")
+	}
+	if setRetain {
+		sets = append(sets, "retain_last = excluded.retain_last", "retain_per = excluded.retain_per")
+	}
+	conflict := "DO NOTHING"
+	if len(sets) > 0 {
+		conflict = "DO UPDATE SET " + strings.Join(sets, ", ")
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO collections (ns, name, normalize, retain_last, retain_per, created_at)
+		VALUES (?,?,?,?,?,?)
+		ON CONFLICT(ns, name) `+conflict,
+		r.NS, r.Coll, string(b), retain.Last, retain.encodePer(), now)
+	if err != nil {
+		return Collection{}, err
+	}
+
+	c, err := s.getCollection(r)
+	if err != nil {
+		return c, err
+	}
+	// A policy set on a collection that already holds documents applies now,
+	// not at the next write. Otherwise declaring a bound on a large collection
+	// looks like it did nothing.
+	if setRetain && c.Retain.Last > 0 && len(c.Retain.Per) == 0 {
+		if _, err := s.enforce(r, c, nil); err != nil {
+			return c, err
+		}
+	}
+	return c, nil
 }
 
 func (s *Store) getCollection(r Ref) (Collection, error) {
-	var raw, created string
-	err := s.db.QueryRow(`SELECT normalize, created_at FROM collections WHERE ns=? AND name=?`,
-		r.NS, r.Coll).Scan(&raw, &created)
+	var raw, created, per string
+	var last int
+	err := s.db.QueryRow(`SELECT normalize, retain_last, retain_per, created_at FROM collections WHERE ns=? AND name=?`,
+		r.NS, r.Coll).Scan(&raw, &last, &per, &created)
 	if err == sql.ErrNoRows {
 		return Collection{}, ErrNoCollection
 	}
@@ -156,12 +191,12 @@ func (s *Store) getCollection(r Ref) (Collection, error) {
 	}
 	rules := map[string]string{}
 	_ = json.Unmarshal([]byte(raw), &rules)
-	return Collection{Ref: r.String(), Normalize: rules, CreatedAt: created}, nil
+	return Collection{Ref: r.String(), Normalize: rules, Retain: decodeRetention(last, per), CreatedAt: created}, nil
 }
 
 // Collections lists every collection, optionally filtered to one namespace.
 func (s *Store) Collections(ns string) ([]Collection, error) {
-	q := `SELECT c.ns, c.name, c.normalize, c.created_at,
+	q := `SELECT c.ns, c.name, c.normalize, c.retain_last, c.retain_per, c.created_at,
 	             (SELECT COUNT(*) FROM records r WHERE r.ns=c.ns AND r.coll=c.name)
 	      FROM collections c`
 	var args []any
@@ -178,14 +213,15 @@ func (s *Store) Collections(ns string) ([]Collection, error) {
 
 	out := []Collection{}
 	for rows.Next() {
-		var n, name, raw, created string
-		var count int
-		if err := rows.Scan(&n, &name, &raw, &created, &count); err != nil {
+		var n, name, raw, per, created string
+		var last, count int
+		if err := rows.Scan(&n, &name, &raw, &last, &per, &created, &count); err != nil {
 			return nil, err
 		}
 		rules := map[string]string{}
 		_ = json.Unmarshal([]byte(raw), &rules)
-		out = append(out, Collection{Ref: n + "/" + name, Normalize: rules, CreatedAt: created, Count: count})
+		out = append(out, Collection{Ref: n + "/" + name, Normalize: rules,
+			Retain: decodeRetention(last, per), CreatedAt: created, Count: count})
 	}
 	return out, rows.Err()
 }

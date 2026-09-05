@@ -86,6 +86,12 @@ Known, because it was measured:
   between bkn and a complex system is mostly atomicity and summarisation, not a
   query language** — a gap that closes with primitives, which is what the
   admission rule allows.
+- That prediction was then tested by closing it. Atomic update operators with
+  compare-and-set, retention declared on the collection, and grouped counts took
+  the same codebase from 33 statements beyond the surface to **11**, or 5% of
+  all 202. Every one of the 11 is relational or presentational — 8 joins, 2
+  `LIKE`, and one two-key display sort — and every one was refused rather than
+  absorbed. The core grew by three primitives and no query language.
 
 Not known, and worth saying plainly:
 

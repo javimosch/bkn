@@ -3,10 +3,12 @@ package server
 import (
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/javimosch/bkn/internal/access"
 	"github.com/javimosch/bkn/internal/auth"
 )
 
@@ -89,6 +91,16 @@ func authStatus(err error) (int, string) {
 }
 
 func (s *Server) authRoutes(mux *http.ServeMux) {
+	// Self-service. An application has no operator standing by when somebody
+	// signs up or changes their own password.
+	mux.HandleFunc("POST /v1/auth/register", s.authRegister)
+	mux.HandleFunc("POST /v1/auth/password", s.authPassword)
+
+	mux.HandleFunc("POST /v1/auth/orgs", s.authCreateOrg)
+	mux.HandleFunc("GET /v1/auth/orgs/{org}/members", s.authMembers)
+	mux.HandleFunc("POST /v1/auth/orgs/{org}/members", s.authAddMember)
+	mux.HandleFunc("DELETE /v1/auth/orgs/{org}/members/{user}", s.authRemoveMember)
+
 	mux.HandleFunc("POST /v1/auth/login", s.authLogin)
 	mux.HandleFunc("POST /v1/auth/refresh", s.authRefresh)
 	mux.HandleFunc("POST /v1/auth/logout", s.authLogout)
@@ -233,4 +245,234 @@ func (s *Server) authListOrgs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(orgs), "orgs": orgs})
+}
+
+// --- self-service ----------------------------------------------------------
+//
+// Creating users and changing passwords were admin operations, because the
+// only client was an operator. An application has neither: nobody is standing
+// by to run `bkn auth user create` when somebody signs up, and a user must be
+// able to change their own password without handing it to an operator first.
+
+// signupOpen reports whether anonymous registration is enabled.
+//
+// It is off by default and turned on by an environment variable rather than a
+// stored setting, because an open registration endpoint is a decision about
+// the deployment, and a deployment is configured where it is started - not by
+// whoever last held a token.
+func signupOpen() bool { return os.Getenv("BKN_OPEN_SIGNUP") == "1" }
+
+func (s *Server) authRegister(w http.ResponseWriter, r *http.Request) {
+	if !signupOpen() {
+		writeErr(w, http.StatusForbidden, "signup_closed",
+			"this deployment does not accept self-service registration; set BKN_OPEN_SIGNUP=1 to allow it")
+		return
+	}
+	body, err := decodeBody(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
+		return
+	}
+	email := auth.NormalizeEmail(str(body, "email"))
+	// The throttle is shared with login. Registration is the other way to
+	// learn whether an address has an account, so it must cost the same.
+	if s.throttle.blocked(email) {
+		w.Header().Set("Retry-After", strconv.Itoa(int(throttleWindow.Seconds())))
+		writeErr(w, http.StatusTooManyRequests, "rate_limited",
+			"too many attempts for this account; try again later")
+		return
+	}
+	// The role is not read from the body. A registration endpoint that let the
+	// caller name their own role would be an admin-account vending machine.
+	u, err := s.auth.CreateUser(email, str(body, "password"), str(body, "name"), "user")
+	if err != nil {
+		if errors.Is(err, auth.ErrEmailTaken) {
+			s.throttle.fail(email)
+		}
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	tokens, err := s.auth.IssueFor(u.ID, "")
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "user": u, "tokens": tokens})
+}
+
+// authPassword changes the caller's own password.
+//
+// It verifies the current password by logging in with it rather than by
+// trusting the access token alone: a token in the wrong hands is exactly the
+// situation where an unverified password change is fatal. Changing a password
+// revokes every session, which is what makes this the recovery move after a
+// token leak.
+func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
+	c := s.caller(r)
+	if c.Kind != access.KindUser {
+		writeErr(w, http.StatusUnauthorized, "not_authenticated",
+			"this endpoint changes your own password, so it needs your access token")
+		return
+	}
+	body, err := decodeBody(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
+		return
+	}
+	u, err := s.auth.FindUser(c.Sub)
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	if s.throttle.blocked(u.Email) {
+		w.Header().Set("Retry-After", strconv.Itoa(int(throttleWindow.Seconds())))
+		writeErr(w, http.StatusTooManyRequests, "rate_limited",
+			"too many failed attempts for this account; try again later")
+		return
+	}
+	if _, err := s.auth.Login(u.Email, str(body, "current_password"), ""); err != nil {
+		if errors.Is(err, auth.ErrBadCredentials) {
+			s.throttle.fail(u.Email)
+		}
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	s.throttle.reset(u.Email)
+	next := str(body, "new_password")
+	if _, err := s.auth.UpdateUser(u.ID, nil, nil, &next, nil); err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "changed": true})
+}
+
+// --- organizations an application can create -------------------------------
+//
+// Creating an organization and inviting somebody into it were operator verbs,
+// which is fine for a deployment with one tenant and impossible for a product
+// where signing up means creating a workspace. These are the same operations
+// the CLI performs, gated by org role instead of by the admin token.
+
+// orgActor resolves the caller and their authority over one organization. A
+// platform admin is deliberately not an owner of anybody's organization - the
+// admin token is, because it is the operator's own credential and the
+// alternative is an operator locked out of the deployment they run.
+func (s *Server) orgActor(w http.ResponseWriter, r *http.Request, org, minRole string) (access.Caller, bool) {
+	c := s.caller(r)
+	if c.Kind == access.KindAdmin {
+		return c, true
+	}
+	if c.Kind != access.KindUser {
+		writeErr(w, http.StatusUnauthorized, "not_authenticated", "this endpoint needs your access token")
+		return c, false
+	}
+	ok, err := s.auth.Can(c.Sub, org, minRole)
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return c, false
+	}
+	if !ok {
+		writeErr(w, http.StatusForbidden, "forbidden",
+			"you need to be "+minRole+" of this organization")
+		return c, false
+	}
+	return c, true
+}
+
+// authCreateOrg creates an organization and makes its creator the owner.
+//
+// Creating one and then belonging to it are a single act from the caller's
+// point of view, and splitting them would leave an ownerless organization
+// behind whenever the second call failed.
+func (s *Server) authCreateOrg(w http.ResponseWriter, r *http.Request) {
+	c := s.caller(r)
+	if c.Kind == access.KindAnon {
+		writeErr(w, http.StatusUnauthorized, "not_authenticated",
+			"creating an organization needs your access token")
+		return
+	}
+	body, err := decodeBody(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
+		return
+	}
+	org, err := s.auth.CreateOrg(str(body, "slug"), str(body, "name"))
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	// An admin creating an organization on somebody else's behalf may name the
+	// owner; a user creating their own workspace is the owner.
+	owner := c.Sub
+	if c.Kind == access.KindAdmin {
+		owner = str(body, "owner")
+	}
+	if owner == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "org": org})
+		return
+	}
+	m, err := s.auth.AddMember(org.ID, owner, "owner")
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "org": org, "membership": m})
+}
+
+func (s *Server) authMembers(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	if _, ok := s.orgActor(w, r, org, "member"); !ok {
+		return
+	}
+	members, err := s.auth.Members(org)
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(members), "members": members})
+}
+
+func (s *Server) authAddMember(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	if _, ok := s.orgActor(w, r, org, "admin"); !ok {
+		return
+	}
+	body, err := decodeBody(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
+		return
+	}
+	role := str(body, "role")
+	if role == "" {
+		role = "member"
+	}
+	m, err := s.auth.AddMember(org, str(body, "user"), role)
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "membership": m})
+}
+
+func (s *Server) authRemoveMember(w http.ResponseWriter, r *http.Request) {
+	org := r.PathValue("org")
+	if _, ok := s.orgActor(w, r, org, "admin"); !ok {
+		return
+	}
+	if err := s.auth.RemoveMember(org, r.PathValue("user")); err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": r.PathValue("user")})
 }

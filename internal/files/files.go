@@ -10,13 +10,17 @@
 package files
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -73,6 +77,11 @@ type Namespace struct {
 	// VerifyType makes the namespace decide a file's type from its bytes
 	// rather than from what the uploader claimed. See Put.
 	VerifyType bool   `json:"verify_type,omitempty"`
+	// SigningKey enables signed URLs for a private namespace. When set,
+	// filesServe accepts ?sig=...&exp=... query params verified with this key.
+	// Empty means no signed access (private namespaces require auth, public ones
+	// are open). The key is never serialized in API responses.
+	SigningKey string `json:"-"`
 	CreatedAt  string `json:"created_at"`
 	Count      int    `json:"count,omitempty"`
 	Bytes      int64  `json:"bytes,omitempty"`
@@ -198,13 +207,13 @@ func (s *Store) EnsureNamespace(ns Namespace) (Namespace, error) {
 		verify = 1
 	}
 	_, err := s.db.Exec(`
-		INSERT INTO file_namespaces (name, backend, max_bytes, allow_types, public, verify_type, created_at)
-		VALUES (?,?,?,?,?,?,?)
+		INSERT INTO file_namespaces (name, backend, max_bytes, allow_types, public, verify_type, signing_key, created_at)
+		VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET
 		  backend=excluded.backend, max_bytes=excluded.max_bytes,
 		  allow_types=excluded.allow_types, public=excluded.public,
-		  verify_type=excluded.verify_type`,
-		ns.Name, ns.Backend, ns.MaxBytes, string(types), pub, verify, ns.CreatedAt)
+		  verify_type=excluded.verify_type, signing_key=excluded.signing_key`,
+		ns.Name, ns.Backend, ns.MaxBytes, string(types), pub, verify, ns.SigningKey, ns.CreatedAt)
 	if err != nil {
 		return Namespace{}, err
 	}
@@ -217,9 +226,9 @@ func (s *Store) Namespace(name string) (Namespace, error) {
 	var types string
 	var pub, verify int
 	err := s.db.QueryRow(`
-		SELECT name, backend, max_bytes, allow_types, public, verify_type, created_at
+		SELECT name, backend, max_bytes, allow_types, public, verify_type, signing_key, created_at
 		FROM file_namespaces WHERE name = ?`, name).
-		Scan(&ns.Name, &ns.Backend, &ns.MaxBytes, &types, &pub, &verify, &ns.CreatedAt)
+		Scan(&ns.Name, &ns.Backend, &ns.MaxBytes, &types, &pub, &verify, &ns.SigningKey, &ns.CreatedAt)
 	if err == sql.ErrNoRows {
 		return Namespace{}, ErrNoNamespace
 	}
@@ -236,7 +245,7 @@ func (s *Store) Namespace(name string) (Namespace, error) {
 // Namespaces lists every namespace with its usage.
 func (s *Store) Namespaces() ([]Namespace, error) {
 	rows, err := s.db.Query(`
-		SELECT n.name, n.backend, n.max_bytes, n.allow_types, n.public, n.verify_type, n.created_at,
+		SELECT n.name, n.backend, n.max_bytes, n.allow_types, n.public, n.verify_type, n.signing_key, n.created_at,
 		       (SELECT COUNT(*) FROM files f WHERE f.ns = n.name),
 		       (SELECT COALESCE(SUM(f.size), 0) FROM files f WHERE f.ns = n.name)
 		FROM file_namespaces n ORDER BY n.name`)
@@ -251,7 +260,7 @@ func (s *Store) Namespaces() ([]Namespace, error) {
 		var types string
 		var pub, verify int
 		if err := rows.Scan(&ns.Name, &ns.Backend, &ns.MaxBytes, &types, &pub, &verify,
-			&ns.CreatedAt, &ns.Count, &ns.Bytes); err != nil {
+			&ns.SigningKey, &ns.CreatedAt, &ns.Count, &ns.Bytes); err != nil {
 			return nil, err
 		}
 		ns.Public = pub == 1
@@ -282,4 +291,39 @@ func (s *Store) DeleteNamespace(name string) error {
 		return ErrNoNamespace
 	}
 	return nil
+}
+
+// --- signed URLs ---------------------------------------------------------
+
+// SignURL produces a time-limited access URL for a file in a private
+// namespace that has a signing_key configured. The signature is
+// HMAC-SHA256(signing_key, "ns/name|exp") encoded as URL-safe base64.
+// The returned URL is a path + query string (no host); the caller prefixes
+// their base URL. An empty signingKey returns an error.
+func SignURL(ns, name, signingKey string, ttl time.Duration) (string, error) {
+	if signingKey == "" {
+		return "", errors.New("namespace has no signing key")
+	}
+	exp := time.Now().Add(ttl).Unix()
+	payload := ns + "/" + name + "|" + strconv.FormatInt(exp, 10)
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	mac.Write([]byte(payload))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return "/v1/files/" + ns + "/" + name + "?sig=" + sig + "&exp=" + strconv.FormatInt(exp, 10), nil
+}
+
+// VerifySignature checks a sig/exp pair against a namespace's signing key.
+// Returns true if the signature is valid and the expiry has not passed.
+func VerifySignature(ns, name, signingKey, sig string, exp int64) bool {
+	if signingKey == "" || sig == "" {
+		return false
+	}
+	if time.Now().Unix() > exp {
+		return false
+	}
+	payload := ns + "/" + name + "|" + strconv.FormatInt(exp, 10)
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	mac.Write([]byte(payload))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(expected), []byte(sig))
 }

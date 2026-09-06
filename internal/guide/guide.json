@@ -127,14 +127,15 @@
       "bkn auth member list <org>"
     ],
     "files": [
-      "bkn files ns create <name> [--backend local|s3] [--max-bytes <n>] [--allow-type <type>] [--public] [--verify-type]",
+      "bkn files ns create <name> [--backend local|s3] [--max-bytes <n>] [--allow-type <type>] [--public] [--verify-type] [--signing-key <key|auto>]",
       "bkn files ns list",
       "bkn files ns delete <name>",
       "bkn files put <namespace> <path> [--name <n>] [--content-type <t>] [--meta <json>] [--overwrite]",
       "bkn files get <namespace> <name> [--out <path>]",
       "bkn files show <namespace> <name>",
       "bkn files list <namespace> [--limit <n>] [--offset <n>]",
-      "bkn files delete <namespace> <name>"
+      "bkn files delete <namespace> <name>",
+      "bkn files sign <namespace> <name> [--ttl <duration>] [--base-url <url>]"
     ],
     "events": [
       "bkn events emit <stream> <type> [--level <l>] [--source <s>] [--subject <s>] [--data <json>]",

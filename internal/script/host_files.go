@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/javimosch/bkn/internal/files"
 )
@@ -144,6 +145,29 @@ func (r *Runner) newFilesAPI(throw func(error)) map[string]any {
 				out[i] = ns
 			}
 			return out
+		},
+		"sign": func(ns, name string, opts map[string]any) string {
+			ttl := 24 * time.Hour
+			if opts != nil {
+				if v, ok := opts["ttl"].(string); ok {
+					d, err := time.ParseDuration(v)
+					if err == nil {
+						ttl = d
+					}
+				}
+			}
+			namespace, err := fs.Namespace(ns)
+			if err != nil {
+				throw(err)
+			}
+			if namespace.SigningKey == "" {
+				throw(fmt.Errorf("namespace %s has no signing key", ns))
+			}
+			url, err := files.SignURL(ns, name, namespace.SigningKey, ttl)
+			if err != nil {
+				throw(err)
+			}
+			return url
 		},
 	}
 }

@@ -89,7 +89,8 @@ func (s *Server) filesList(w http.ResponseWriter, r *http.Request) {
 }
 
 // filesServe streams a file's bytes. A public namespace needs no auth; every
-// other one does.
+// other one requires either an authed session or a valid signed URL
+// (?sig=...&exp=... when the namespace has a signing_key).
 func (s *Server) filesServe(w http.ResponseWriter, r *http.Request) {
 	nsName := r.PathValue("ns")
 	ns, err := s.files.Namespace(nsName)
@@ -100,10 +101,22 @@ func (s *Server) filesServe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ns.Public && !s.authed(r) {
+		// Check for a signed URL before rejecting.
+		if ns.SigningKey != "" {
+			sig := r.URL.Query().Get("sig")
+			expStr := r.URL.Query().Get("exp")
+			if sig != "" && expStr != "" {
+				exp, err := strconv.ParseInt(expStr, 10, 64)
+				if err == nil && files.VerifySignature(nsName, r.PathValue("name"), ns.SigningKey, sig, exp) {
+					// Signature valid — serve the file.
+					goto serve
+				}
+			}
+		}
 		writeErr(w, http.StatusNotFound, "not_found", "file not found")
 		return
 	}
-
+serve:
 	f, rc, err := s.files.Get(nsName, r.PathValue("name"))
 	if err != nil {
 		status, typ := filesStatus(err)

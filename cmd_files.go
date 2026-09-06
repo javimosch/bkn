@@ -1,18 +1,21 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/javimosch/bkn/internal/files"
 	"github.com/javimosch/bkn/internal/out"
 )
 
-const filesUsage = "bkn files <ns|put|get|show|list|delete> ..."
+const filesUsage = "bkn files <ns|put|get|show|list|delete|sign> ..."
 
 func failFiles(err error) {
 	switch {
@@ -160,6 +163,29 @@ func cmdFiles(args []string) {
 		}
 		out.Data(map[string]any{"deleted": rest[1], "namespace": rest[0]})
 
+	case "sign":
+		flags := flag.NewFlagSet("files sign", flag.ExitOnError)
+		ttl := flags.Duration("ttl", 24*time.Hour, "how long the URL stays valid (e.g. 24h, 7d)")
+		baseURL := flags.String("base-url", "", "prefix the URL with this base (e.g. https://bkn.intrane.fr)")
+		pos := parseFlags(flags, rest)
+		need(pos, 2, "bkn files sign <namespace> <name> [--ttl 24h] [--base-url https://...]")
+
+		ns, err := fs.Namespace(pos[0])
+		if err != nil {
+			failFiles(err)
+		}
+		if ns.SigningKey == "" {
+			out.Fail(out.InvalidArguments, "no_signing_key",
+				"namespace has no signing key; create one with --signing-key",
+				"bkn files ns create <name> --signing-key <key>")
+		}
+		url, err := files.SignURL(pos[0], pos[1], ns.SigningKey, *ttl)
+		if err != nil {
+			out.Fail(out.InternalError, "sign_failed", err.Error())
+		}
+		full := *baseURL + url
+		out.Data(map[string]any{"url": full, "expires_in": ttl.String()})
+
 	default:
 		out.Fail(out.InvalidArguments, "unknown_command", "unknown files subcommand "+sub, "usage: "+filesUsage)
 	}
@@ -177,18 +203,28 @@ func cmdFilesNS(fs *files.Store, args []string) {
 		public := flags.Bool("public", false, "serve these files over HTTP without auth")
 		verifyType := flags.Bool("verify-type", false,
 			"decide a file's type from its bytes, refusing an upload whose declared type disagrees")
+		signingKey := flags.String("signing-key", "", "enable signed URLs with this HMAC key (use 'auto' to generate one)")
 		var allow repeated
 		flags.Var(&allow, "allow-type", "permitted content type, repeatable (\"image/*\")")
 		pos := parseFlags(flags, rest)
-		need(pos, 1, "bkn files ns create <name> [--backend local|s3] [--max-bytes N] [--allow-type image/*] [--public] [--verify-type]")
+		need(pos, 1, "bkn files ns create <name> [--backend local|s3] [--max-bytes N] [--allow-type image/*] [--public] [--verify-type] [--signing-key <key|auto>]")
 
 		n, err := strconv.ParseInt(*maxBytes, 10, 64)
 		if err != nil || n < 0 {
 			out.Fail(out.InvalidValue, "invalid_value", "--max-bytes must be a non-negative integer")
 		}
+		key := *signingKey
+		if key == "auto" {
+			keyBytes := make([]byte, 32)
+			if _, err := rand.Read(keyBytes); err != nil {
+				out.Fail(out.InternalError, "keygen_failed", err.Error())
+			}
+			key = base64.RawURLEncoding.EncodeToString(keyBytes)
+			out.Log("[files] generated signing key (save it): %s", key)
+		}
 		ns, err := fs.EnsureNamespace(files.Namespace{
 			Name: pos[0], Backend: *backend, MaxBytes: n, AllowTypes: allow,
-			Public: *public, VerifyType: *verifyType,
+			Public: *public, VerifyType: *verifyType, SigningKey: key,
 		})
 		if err != nil {
 			failFiles(err)

@@ -86,13 +86,14 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 CREATE INDEX IF NOT EXISTS cron_due ON cron_jobs(enabled, next_run_at);
 
 CREATE TABLE IF NOT EXISTS file_namespaces (
-  name        TEXT PRIMARY KEY,
-  backend     TEXT NOT NULL DEFAULT 'local',
-  max_bytes   INTEGER NOT NULL DEFAULT 0,
-  allow_types TEXT NOT NULL DEFAULT '[]',
-  public      INTEGER NOT NULL DEFAULT 0,
-  verify_type INTEGER NOT NULL DEFAULT 0,
-  created_at  TEXT NOT NULL
+  name         TEXT PRIMARY KEY,
+  backend      TEXT NOT NULL DEFAULT 'local',
+  max_bytes    INTEGER NOT NULL DEFAULT 0,
+  allow_types  TEXT NOT NULL DEFAULT '[]',
+  public       INTEGER NOT NULL DEFAULT 0,
+  verify_type  INTEGER NOT NULL DEFAULT 0,
+  signing_key  TEXT NOT NULL DEFAULT '',
+  created_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -236,6 +237,7 @@ var addedColumns = []string{
 	`ALTER TABLE collections ADD COLUMN retain_per TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE collections ADD COLUMN access TEXT NOT NULL DEFAULT '{}'`,
 	`ALTER TABLE file_namespaces ADD COLUMN verify_type INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE file_namespaces ADD COLUMN signing_key TEXT NOT NULL DEFAULT ''`,
 }
 
 func addColumns(conn *sql.DB) error {

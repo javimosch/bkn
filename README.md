@@ -422,6 +422,41 @@ attachments with `X-Content-Type-Options: nosniff` and
 namespace answers 404 to an unauthenticated caller, exactly like one that does
 not exist.
 
+A name is claimed and written in one statement. `files put` refuses an
+existing name with `already_exists` unless `--overwrite`, and that refusal used
+to be a lookup followed, some way down, by an unconditional upsert — so two
+uploads of the same free name both saw it free, both wrote, and the second
+silently replaced the first. Nothing looked wrong afterwards: the name still
+resolved, it just pointed at the other file. A test runs twelve writers at one
+name and asserts exactly one wins; against the previous code **all twelve
+reported success.**
+
+A namespace may also decide a file's type from its bytes rather than from what
+the uploader said:
+
+```sh
+bkn files ns create avatars --allow-type 'image/*' --verify-type
+```
+
+Without it the allow-list is checked against a string the caller sent —
+declare `Content-Type: image/png` over any bytes at all and an image-only
+namespace accepts them and records them as an image. That is tolerable while
+the only writer holds the admin token, and stops being tolerable the moment a
+tenant can upload.
+
+The cost is worth stating rather than hiding, because it decides whether you
+want the flag: **a sniffer sees bytes, not intentions.** A namespace that
+verifies types allow-lists what files *look like*, not what they are called. A
+`.docx` is a zip and sniffs as `application/zip`; a `.css` full of words sniffs
+as `text/plain`. A declared type is kept when it is a more specific truth about
+bytes the sniffer can only call a container — `docx` over zip is accepted,
+`image/png` over zip is not. And bytes resembling no known format sniff as
+`application/octet-stream`, which is the sniffer declining to answer rather
+than evidence of a lie, so arbitrary binary can still be declared as anything
+the allow-list permits. What the flag removes is the whole class the sniffer
+*can* name: HTML, JavaScript, SVG, and every text format a browser would act
+on. It is off by default, so existing namespaces are unchanged.
+
 The `s3` backend speaks the S3 REST API directly with hand-rolled SigV4 — no
 SDK, because object storage needs three verbs and one signing algorithm, and
 the official client pulls in a dependency tree larger than this program. It is
@@ -698,7 +733,12 @@ all reachable over HTTP. Three things are honestly not:
 
 - **Files are not scoped.** A namespace is `--public` or admin-only; there is
   no per-user upload, so avatars and user attachments still go through a hook
-  script that does its own checking.
+  script that does its own checking. The two things that had to be true before
+  that could change are now true — a name cannot be taken by a racing writer,
+  and a namespace can refuse bytes that contradict their declared type — but
+  the policy layer itself is not built. Note that scoping would not remove a
+  hook like the signalement one: its real work is relational (does this record
+  exist, does it already have five) and no namespace policy expresses that.
 - **There is no realtime.** No websockets, no server-sent events. Anything
   built on presence, live cursors or a chat feed is not a bkn application.
 - **There is no text search.** Filters are equality, ranges and `in`; a search

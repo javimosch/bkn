@@ -105,7 +105,7 @@ func helpJSON() map[string]any {
 			"auth member add":    c([]string{"org", "user"}, []string{"--role <owner|admin|member>"}),
 			"auth member remove": c([]string{"org", "user"}, none),
 			"auth member list":   c([]string{"org"}, none),
-			"files ns create":    c([]string{"name"}, []string{"--backend <local|s3>", "--max-bytes <n>", "--allow-type <type>", "--public"}),
+			"files ns create":    c([]string{"name"}, []string{"--backend <local|s3>", "--max-bytes <n>", "--allow-type <type>", "--public", "--verify-type"}),
 			"files ns list":      c(none, none),
 			"files ns delete":    c([]string{"name"}, none),
 			"files put":          c([]string{"namespace", "path"}, []string{"--name <n>", "--content-type <t>", "--meta <json>", "--overwrite", "--stdin"}),
@@ -221,7 +221,7 @@ func printHelp() {
     bkn auth sessions <user> | revoke <user> | memberships <user>
 
   files   namespaced blob storage, local or S3
-    bkn files ns create <name> [--backend local|s3] [--allow-type image/*] [--public]
+    bkn files ns create <name> [--backend local|s3] [--allow-type image/*] [--public] [--verify-type]
     bkn files ns list | delete <name>
     bkn files put <ns> <path> [--name N] [--overwrite]
     bkn files get <ns> <name> [--out <path>]

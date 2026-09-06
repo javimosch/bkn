@@ -746,3 +746,11 @@ all reachable over HTTP. Three things are honestly not:
 
 The first is a gap. The other two are scope decisions, and closing either one
 would be a different program.
+
+The claim that the core is the right size is currently supported by one
+fit-check against the codebase bkn was derived from, which is weak evidence by
+construction. [creneau](https://github.com/javimosch/creneau) is a second one
+against a domain bkn had no hand in — a booking backend, chosen because its
+hard parts (never double-book, with no transactions; reschedule, with no
+primitive for it at all) are ones bkn claims to handle. Its pass/fail criteria
+were committed before any of its code was written.

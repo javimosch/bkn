@@ -28,6 +28,7 @@ var (
 	ErrBadName      = errors.New("file name must be 1-255 characters and contain no path separators")
 	ErrTooLarge     = errors.New("file exceeds the namespace size limit")
 	ErrTypeRefused  = errors.New("content type is not allowed in this namespace")
+	ErrTypeMismatch = errors.New("declared content type does not match the uploaded bytes")
 	ErrBadBackend   = errors.New("backend must be one of: local, s3")
 	ErrExists       = errors.New("a file with that name already exists in this namespace")
 )
@@ -69,9 +70,12 @@ type Namespace struct {
 	MaxBytes   int64    `json:"max_bytes"`
 	AllowTypes []string `json:"allow_types"`
 	Public     bool     `json:"public"`
-	CreatedAt  string   `json:"created_at"`
-	Count      int      `json:"count,omitempty"`
-	Bytes      int64    `json:"bytes,omitempty"`
+	// VerifyType makes the namespace decide a file's type from its bytes
+	// rather than from what the uploader claimed. See Put.
+	VerifyType bool   `json:"verify_type,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	Count      int    `json:"count,omitempty"`
+	Bytes      int64  `json:"bytes,omitempty"`
 }
 
 // Limit returns the effective size cap.
@@ -189,13 +193,18 @@ func (s *Store) EnsureNamespace(ns Namespace) (Namespace, error) {
 	if ns.Public {
 		pub = 1
 	}
+	verify := 0
+	if ns.VerifyType {
+		verify = 1
+	}
 	_, err := s.db.Exec(`
-		INSERT INTO file_namespaces (name, backend, max_bytes, allow_types, public, created_at)
-		VALUES (?,?,?,?,?,?)
+		INSERT INTO file_namespaces (name, backend, max_bytes, allow_types, public, verify_type, created_at)
+		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET
 		  backend=excluded.backend, max_bytes=excluded.max_bytes,
-		  allow_types=excluded.allow_types, public=excluded.public`,
-		ns.Name, ns.Backend, ns.MaxBytes, string(types), pub, ns.CreatedAt)
+		  allow_types=excluded.allow_types, public=excluded.public,
+		  verify_type=excluded.verify_type`,
+		ns.Name, ns.Backend, ns.MaxBytes, string(types), pub, verify, ns.CreatedAt)
 	if err != nil {
 		return Namespace{}, err
 	}
@@ -206,11 +215,11 @@ func (s *Store) EnsureNamespace(ns Namespace) (Namespace, error) {
 func (s *Store) Namespace(name string) (Namespace, error) {
 	var ns Namespace
 	var types string
-	var pub int
+	var pub, verify int
 	err := s.db.QueryRow(`
-		SELECT name, backend, max_bytes, allow_types, public, created_at
+		SELECT name, backend, max_bytes, allow_types, public, verify_type, created_at
 		FROM file_namespaces WHERE name = ?`, name).
-		Scan(&ns.Name, &ns.Backend, &ns.MaxBytes, &types, &pub, &ns.CreatedAt)
+		Scan(&ns.Name, &ns.Backend, &ns.MaxBytes, &types, &pub, &verify, &ns.CreatedAt)
 	if err == sql.ErrNoRows {
 		return Namespace{}, ErrNoNamespace
 	}
@@ -218,6 +227,7 @@ func (s *Store) Namespace(name string) (Namespace, error) {
 		return Namespace{}, err
 	}
 	ns.Public = pub == 1
+	ns.VerifyType = verify == 1
 	ns.AllowTypes = []string{}
 	_ = json.Unmarshal([]byte(types), &ns.AllowTypes)
 	return ns, nil
@@ -226,7 +236,7 @@ func (s *Store) Namespace(name string) (Namespace, error) {
 // Namespaces lists every namespace with its usage.
 func (s *Store) Namespaces() ([]Namespace, error) {
 	rows, err := s.db.Query(`
-		SELECT n.name, n.backend, n.max_bytes, n.allow_types, n.public, n.created_at,
+		SELECT n.name, n.backend, n.max_bytes, n.allow_types, n.public, n.verify_type, n.created_at,
 		       (SELECT COUNT(*) FROM files f WHERE f.ns = n.name),
 		       (SELECT COALESCE(SUM(f.size), 0) FROM files f WHERE f.ns = n.name)
 		FROM file_namespaces n ORDER BY n.name`)
@@ -239,12 +249,13 @@ func (s *Store) Namespaces() ([]Namespace, error) {
 	for rows.Next() {
 		var ns Namespace
 		var types string
-		var pub int
-		if err := rows.Scan(&ns.Name, &ns.Backend, &ns.MaxBytes, &types, &pub,
+		var pub, verify int
+		if err := rows.Scan(&ns.Name, &ns.Backend, &ns.MaxBytes, &types, &pub, &verify,
 			&ns.CreatedAt, &ns.Count, &ns.Bytes); err != nil {
 			return nil, err
 		}
 		ns.Public = pub == 1
+		ns.VerifyType = verify == 1
 		ns.AllowTypes = []string{}
 		_ = json.Unmarshal([]byte(types), &ns.AllowTypes)
 		out = append(out, ns)

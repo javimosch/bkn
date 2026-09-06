@@ -8,7 +8,7 @@ import (
 	"github.com/javimosch/bkn/internal/store"
 )
 
-const storeUsage = "bkn store <create|put|get|find|list|count|patch|delete|collections> ..."
+const storeUsage = "bkn store <create|access|put|get|find|list|count|patch|delete|collections> ..."
 
 func cmdStore(args []string) {
 	need(args, 1, storeUsage)
@@ -29,12 +29,17 @@ func cmdStore(args []string) {
 	switch sub {
 	case "create":
 		fs := flag.NewFlagSet("store create", flag.ExitOnError)
-		var norms, retainPer repeated
+		var norms, retainPer, accessRules repeated
 		fs.Var(&norms, "normalize", "field=rule, repeatable ("+strings.Join(store.ValidNormalizers(), "|")+")")
 		fs.Var(&retainPer, "retain-per", "partition the bound by this field, repeatable or comma-separated")
+		fs.Var(&accessRules, "access", "verb=audience, repeatable or comma-separated ("+
+			strings.Join(store.Verbs(), "|")+" = "+strings.Join(store.Audiences(), "|")+")")
 		retainLast := fs.String("retain-last", "", "keep at most N documents, newest first; 0 removes the bound")
+		ownerField := fs.String("owner-field", "", "document field holding the owning user id, for --access ...=owner")
+		orgField := fs.String("org-field", "", "document field holding the owning org id, for --access ...=org")
 		pos := parseFlags(fs, rest)
-		need(pos, 1, "bkn store create <ns/coll> [--normalize field=rule] [--retain-last N [--retain-per field]]")
+		need(pos, 1, "bkn store create <ns/coll> [--normalize field=rule] [--retain-last N [--retain-per field]] "+
+			"[--access read=owner --owner-field user_id]")
 
 		rules := map[string]string{}
 		for _, n := range norms {
@@ -49,7 +54,53 @@ func cmdStore(args []string) {
 		if err != nil {
 			failStore(err)
 		}
-		c, err := st.EnsureCollectionWith(parseRef(pos[0]), rules, retain, setRetain)
+		ref := parseRef(pos[0])
+		setAccess := len(accessRules) > 0 || *ownerField != "" || *orgField != ""
+		acc, err := store.ParseAccess(accessRules, *ownerField, *orgField)
+		if err != nil {
+			failStore(err)
+		}
+		c, err := st.EnsureCollectionWith(ref, rules, retain, setRetain)
+		if err != nil {
+			failStore(err)
+		}
+		if setAccess {
+			if c, err = st.SetAccess(ref, acc); err != nil {
+				failStore(err)
+			}
+		}
+		out.Data(map[string]any{"collection": c})
+
+	case "access":
+		fs := flag.NewFlagSet("store access", flag.ExitOnError)
+		var accessRules repeated
+		fs.Var(&accessRules, "access", "verb=audience, repeatable or comma-separated ("+
+			strings.Join(store.Verbs(), "|")+" = "+strings.Join(store.Audiences(), "|")+")")
+		ownerField := fs.String("owner-field", "", "document field holding the owning user id")
+		orgField := fs.String("org-field", "", "document field holding the owning org id")
+		clear := fs.Bool("clear", false, "remove the policy, returning the collection to admin-only")
+		pos := parseFlags(fs, rest)
+		need(pos, 1, "bkn store access <ns/coll> [--access read=owner --owner-field user_id] [--clear]")
+		ref := parseRef(pos[0])
+
+		// With no flags this reads rather than writes, so an operator can ask
+		// what a collection currently allows without risking changing it.
+		if !*clear && len(accessRules) == 0 && *ownerField == "" && *orgField == "" {
+			c, err := st.Describe(ref)
+			if err != nil {
+				failStore(err)
+			}
+			out.Data(map[string]any{"collection": c.Ref, "access": c.Access, "rules": c.Access.String()})
+			return
+		}
+		acc := store.Access{}
+		if !*clear {
+			var err error
+			if acc, err = store.ParseAccess(accessRules, *ownerField, *orgField); err != nil {
+				failStore(err)
+			}
+		}
+		c, err := st.SetAccess(ref, acc)
 		if err != nil {
 			failStore(err)
 		}

@@ -67,6 +67,7 @@ type Collection struct {
 	Ref       string            `json:"ref"`
 	Normalize map[string]string `json:"normalize"`
 	Retain    Retention         `json:"retain,omitzero"`
+	Access    Access            `json:"access,omitzero"`
 	CreatedAt string            `json:"created_at"`
 	Count     int               `json:"count,omitempty"`
 }
@@ -95,23 +96,96 @@ func normalize(rule, v string) (string, error) {
 
 func ValidNormalizers() []string { return []string{"lower", "upper", "trim", "trim_lower"} }
 
+// ErrBadNormalizerField is a normalizer declared on a field path the store
+// cannot address.
+var ErrBadNormalizerField = errors.New("invalid normalizer field")
+
+// validNormalizerField rejects a path the store could accept and then quietly
+// fail to apply. Dots separate object keys; anything else that would need a
+// real JSON-path parser - array indices, quoting, wildcards - is refused at
+// declaration time rather than ignored at write time.
+func validNormalizerField(field string) error {
+	if field == "" {
+		return fmt.Errorf("%w: empty field name", ErrBadNormalizerField)
+	}
+	if strings.ContainsAny(field, "$[]'\"* ") {
+		return fmt.Errorf("%w: %q - only object keys separated by dots are supported", ErrBadNormalizerField, field)
+	}
+	for _, segment := range strings.Split(field, ".") {
+		if segment == "" {
+			return fmt.Errorf("%w: %q has an empty path segment", ErrBadNormalizerField, field)
+		}
+	}
+	return nil
+}
+
+// applyNormalizers rewrites declared fields in place.
+//
+// A field may name a nested key with dots - "declarant.email" - because the
+// filter side already addresses documents that way: whereClause builds
+// "$."+field for json_extract, and normalizes the filter value using this same
+// rule map. Before this walked the path, the two halves disagreed: a lookup
+// value was normalized while the stored value was not, so a document was
+// unfindable by the very field its collection declared as normalized.
 func applyNormalizers(rules map[string]string, doc map[string]any) error {
 	for field, rule := range rules {
-		raw, ok := doc[field]
+		// A literal key wins when one exists, so a document that really does
+		// hold a key containing a dot keeps behaving as it did.
+		if raw, ok := doc[field]; ok {
+			n, err := normalizeIfString(rule, raw)
+			if err != nil {
+				return err
+			}
+			if n != nil {
+				doc[field] = n
+			}
+			continue
+		}
+
+		segments := strings.Split(field, ".")
+		if len(segments) == 1 {
+			continue // absent top-level field: nothing to normalize
+		}
+		parent := doc
+		for _, segment := range segments[:len(segments)-1] {
+			next, ok := parent[segment].(map[string]any)
+			if !ok {
+				parent = nil // path does not exist, or is not an object
+				break
+			}
+			parent = next
+		}
+		if parent == nil {
+			continue
+		}
+		leaf := segments[len(segments)-1]
+		raw, ok := parent[leaf]
 		if !ok {
 			continue
 		}
-		s, ok := raw.(string)
-		if !ok {
-			continue // normalizers apply to strings only; other types pass through
-		}
-		n, err := normalize(rule, s)
+		n, err := normalizeIfString(rule, raw)
 		if err != nil {
 			return err
 		}
-		doc[field] = n
+		if n != nil {
+			parent[leaf] = n
+		}
 	}
 	return nil
+}
+
+// normalizeIfString returns the normalized value, or nil when the value is not
+// a string - normalizers apply to strings only; other types pass through.
+func normalizeIfString(rule string, raw any) (any, error) {
+	s, ok := raw.(string)
+	if !ok {
+		return nil, nil
+	}
+	n, err := normalize(rule, s)
+	if err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // --- collections ----------------------------------------------------------
@@ -127,7 +201,10 @@ func (s *Store) EnsureCollection(r Ref, rules map[string]string) (Collection, er
 // which calls EnsureCollection - can never silently drop the bound somebody
 // declared.
 func (s *Store) EnsureCollectionWith(r Ref, rules map[string]string, retain Retention, setRetain bool) (Collection, error) {
-	for _, rule := range rules {
+	for field, rule := range rules {
+		if err := validNormalizerField(field); err != nil {
+			return Collection{}, err
+		}
 		if _, err := normalize(rule, ""); err != nil {
 			return Collection{}, err
 		}
@@ -179,10 +256,10 @@ func (s *Store) EnsureCollectionWith(r Ref, rules map[string]string, retain Rete
 }
 
 func (s *Store) getCollection(r Ref) (Collection, error) {
-	var raw, created, per string
+	var raw, created, per, acc string
 	var last int
-	err := s.db.QueryRow(`SELECT normalize, retain_last, retain_per, created_at FROM collections WHERE ns=? AND name=?`,
-		r.NS, r.Coll).Scan(&raw, &last, &per, &created)
+	err := s.db.QueryRow(`SELECT normalize, retain_last, retain_per, access, created_at FROM collections WHERE ns=? AND name=?`,
+		r.NS, r.Coll).Scan(&raw, &last, &per, &acc, &created)
 	if err == sql.ErrNoRows {
 		return Collection{}, ErrNoCollection
 	}
@@ -191,12 +268,57 @@ func (s *Store) getCollection(r Ref) (Collection, error) {
 	}
 	rules := map[string]string{}
 	_ = json.Unmarshal([]byte(raw), &rules)
-	return Collection{Ref: r.String(), Normalize: rules, Retain: decodeRetention(last, per), CreatedAt: created}, nil
+	return Collection{Ref: r.String(), Normalize: rules, Retain: decodeRetention(last, per),
+		Access: decodeAccess(acc), CreatedAt: created}, nil
+}
+
+// Describe returns a collection's declared rules, or ErrNoCollection. The
+// server needs the access policy before it can decide whether the caller may
+// do the thing they are asking for, so this is the one read that happens
+// ahead of authorization rather than after it.
+func (s *Store) Describe(r Ref) (Collection, error) { return s.getCollection(r) }
+
+// SetAccess declares (or clears) a collection's authorization policy. It is a
+// separate operation from EnsureCollection because a policy is normally set
+// once, on a collection that already exists, and because an ordinary write
+// must never be able to touch it.
+func (s *Store) SetAccess(r Ref, a Access) (Collection, error) {
+	if err := a.Validate(); err != nil {
+		return Collection{}, err
+	}
+	if _, err := s.getCollection(r); err != nil {
+		return Collection{}, err
+	}
+	if _, err := s.db.Exec(`UPDATE collections SET access=? WHERE ns=? AND name=?`,
+		encodeAccess(a), r.NS, r.Coll); err != nil {
+		return Collection{}, err
+	}
+	return s.getCollection(r)
+}
+
+func encodeAccess(a Access) string {
+	if a.IsZero() {
+		return "{}"
+	}
+	b, err := json.Marshal(a)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func decodeAccess(raw string) Access {
+	var a Access
+	if raw == "" {
+		return a
+	}
+	_ = json.Unmarshal([]byte(raw), &a)
+	return a
 }
 
 // Collections lists every collection, optionally filtered to one namespace.
 func (s *Store) Collections(ns string) ([]Collection, error) {
-	q := `SELECT c.ns, c.name, c.normalize, c.retain_last, c.retain_per, c.created_at,
+	q := `SELECT c.ns, c.name, c.normalize, c.retain_last, c.retain_per, c.access, c.created_at,
 	             (SELECT COUNT(*) FROM records r WHERE r.ns=c.ns AND r.coll=c.name)
 	      FROM collections c`
 	var args []any
@@ -213,15 +335,16 @@ func (s *Store) Collections(ns string) ([]Collection, error) {
 
 	out := []Collection{}
 	for rows.Next() {
-		var n, name, raw, per, created string
+		var n, name, raw, per, acc, created string
 		var last, count int
-		if err := rows.Scan(&n, &name, &raw, &last, &per, &created, &count); err != nil {
+		if err := rows.Scan(&n, &name, &raw, &last, &per, &acc, &created, &count); err != nil {
 			return nil, err
 		}
 		rules := map[string]string{}
 		_ = json.Unmarshal([]byte(raw), &rules)
 		out = append(out, Collection{Ref: n + "/" + name, Normalize: rules,
-			Retain: decodeRetention(last, per), CreatedAt: created, Count: count})
+			Retain: decodeRetention(last, per), Access: decodeAccess(acc),
+			CreatedAt: created, Count: count})
 	}
 	return out, rows.Err()
 }

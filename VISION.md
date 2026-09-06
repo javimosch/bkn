@@ -71,8 +71,10 @@ make deliberately, not a number to maximize.
 Known, because it was measured:
 
 - A clean-room reimplementation in another language (`machin-bkn`) passes the
-  same **113-assertion live suite**, unmodified. The contract is portable, not a
-  description of one codebase.
+  same **113-assertion live suite**, unmodified — every assertion that existed
+  when it was gated. The contract is portable, not a description of one
+  codebase. The suite has since grown to 164; the difference is contract the
+  second implementation has not been held to yet.
 - Read paths are a wash between the two; the write path trades p50 for p99.
 - 20.1 MB stripped / 17 MB idle RSS for the Go build; 7.8 MB static / 3.3 MB for
   the MFL one.

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS collections (
   normalize   TEXT NOT NULL DEFAULT '{}',
   retain_last INTEGER NOT NULL DEFAULT 0,
   retain_per  TEXT NOT NULL DEFAULT '',
+  access      TEXT NOT NULL DEFAULT '{}',
   created_at  TEXT NOT NULL,
   PRIMARY KEY (ns, name)
 );
@@ -232,6 +233,7 @@ var addedColumns = []string{
 	`ALTER TABLE hooks ADD COLUMN rate_limit INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE collections ADD COLUMN retain_last INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE collections ADD COLUMN retain_per TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE collections ADD COLUMN access TEXT NOT NULL DEFAULT '{}'`,
 }
 
 func addColumns(conn *sql.DB) error {

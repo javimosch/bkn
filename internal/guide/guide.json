@@ -56,11 +56,15 @@
     "atomic_updates": "A patch field may be an operator instead of a value: {\"$inc\":1}, {\"$append\":\"line\\n\"}, {\"$push\":\"item\"}, {\"$setIfEmpty\":\"w1\"}. The new value is computed from the current one and written under compare-and-set, so concurrent patches do not lose each other's updates. A plain object is still a plain value; only a single $-prefixed key is an operator.",
     "preconditions": "store patch --if field=value and --if-absent field are checked against the document being written and are ANDed. A failed precondition writes nothing and exits 95 (precondition_failed). --if-absent claims a field exactly once, which is how one worker takes a job. There is no OR, matching the query surface.",
     "retention": "A collection may declare a bound: --retain-last N keeps the newest N documents, and --retain-per <field> gives each distinct value of that field its own N. The store enforces it on every write and when the policy is declared, so no caller writes a trim query and nothing has to be scheduled. Ordering is created_at then insertion order. No bound means unbounded; --retain-per without --retain-last is rejected because it would enforce nothing.",
-    "rollup": "store count answers how many, not which. With --by <field> it returns one bucket per distinct value, largest first, alongside total (documents matching) and groups (distinct values before any limit) so truncation is visible. A document with no value for the field gets a null key, which is different from an empty string. It composes with --where, so the filter applies before the grouping. One field, one aggregate: no expressions, no having, no joins, and it never returns documents."
+    "rollup": "store count answers how many, not which. With --by <field> it returns one bucket per distinct value, largest first, alongside total (documents matching) and groups (distinct values before any limit) so truncation is visible. A document with no value for the field gets a null key, which is different from an empty string. It composes with --where, so the filter applies before the grouping. One field, one aggregate: no expressions, no having, no joins, and it never returns documents.",
+    "access policy": "What a collection allows a non-admin caller to do, declared on the collection: a verb (read, create, update, delete) mapped to an audience (admin, user, owner, org, public). Undeclared means admin-only, so a collection nobody has spoken about behaves exactly as it always did. 'owner' and 'org' also scope: they need --owner-field or --org-field naming the document field that holds the user or org id, and bkn applies that as part of every read and write rather than as a check beside it.",
+    "scope stamping": "On a scoped create, bkn writes the caller's own user or org id into the scope field, overwriting whatever the body said. A document cannot be created into somebody else's tenant, because the tenant is not something the client gets to state.",
+    "normalizers": "A collection declares field normalization (lower, upper, trim, trim_lower). The store applies it on every write AND to every filter value for the same field, so a lookup finds the row a normalized write created. A field may name a nested key with dots, e.g. declarant.email. A path the store cannot address (array indices, quoting, wildcards) is rejected when declared rather than silently ignored."
   },
   "commands": {
     "store": [
-      "bkn store create <ns/coll> [--normalize <field=rule>] [--retain-last <n> [--retain-per <field>]]",
+      "bkn store create <ns/coll> [--normalize <field=rule>] [--retain-last <n> [--retain-per <field>]] [--access <verb=audience>] [--owner-field <f>] [--org-field <f>]",
+      "bkn store access <ns/coll> [--access <verb=audience>] [--owner-field <f>] [--org-field <f>] [--clear]",
       "bkn store put <ns/coll> --data <json|@file|-> [--id <id>] [--if-absent]",
       "bkn store get <ns/coll> <id>",
       "bkn store find <ns/coll> --where <predicate>",
@@ -415,7 +419,12 @@
     "Telemetry is opt-IN here, not opt-out: bkn holds encrypted secrets, password hashes and token signing keys, and the spec asks such tools for the stricter default. Nothing is sent until `bkn telemetry --on`.",
     "`bkn telemetry` prints the exact payload that would be sent, and BKN_TELEMETRY_URL points it somewhere else - so what it sends can be observed without letting it send.",
     "`bkn feedback` never fails the caller. If neither the app endpoint nor the relay is reachable it says so on stderr and still exits 0, because losing a bug report to a failed bug report is the worst outcome.",
-    "Both feedback writes carry the same id, so a retry is stored once. FEEDBACK_RELAY=off keeps submissions local."
+    "Both feedback writes carry the same id, so a retry is stored once. FEEDBACK_RELAY=off keeps submissions local.",
+    "A scoped caller reading, patching or deleting another tenant's document gets 404, not 403. Distinguishing them would confirm the id is real to somebody with no right to know that.",
+    "An access policy grants, it never revokes. Declaring read=public leaves create, update and delete admin-only, because an undeclared verb is admin.",
+    "An 'org' audience refuses a token that carries no organization rather than treating it as unscoped. Sign in with --org, or call /v1/auth/switch-org.",
+    "Cross-origin browser calls need BKN_CORS_ORIGIN set to an explicit allow-list. It is unset by default, which means no browser on another origin can call the API at all.",
+    "Self-service registration is off unless BKN_OPEN_SIGNUP=1. An open registration endpoint is a property of the deployment, not of whoever last held a token."
   ],
   "see_also": [
     "bkn help-json",

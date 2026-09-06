@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/javimosch/bkn/internal/access"
 	"github.com/javimosch/bkn/internal/auth"
 	"github.com/javimosch/bkn/internal/cron"
 	"github.com/javimosch/bkn/internal/events"
@@ -212,11 +213,16 @@ func (s *Server) routes() http.Handler {
 		fmt.Fprint(w, guide.LLMsTxt(s.cfg.Version))
 	})
 
-	mux.HandleFunc("GET /v1/store/{ns}/{coll}", s.guard(s.storeList))
-	mux.HandleFunc("POST /v1/store/{ns}/{coll}", s.guard(s.storePut))
-	mux.HandleFunc("GET /v1/store/{ns}/{coll}/{id}", s.guard(s.storeGet))
-	mux.HandleFunc("PATCH /v1/store/{ns}/{coll}/{id}", s.guard(s.storePatch))
-	mux.HandleFunc("DELETE /v1/store/{ns}/{coll}/{id}", s.guard(s.storeDelete))
+	// Store routes are authorized by the collection's declared policy rather
+	// than by the admin token alone. An undeclared collection is admin-only,
+	// so this is the same gate it always was until somebody says otherwise.
+	mux.HandleFunc("GET /v1/collections", s.guard(s.collectionList))
+	mux.HandleFunc("PUT /v1/store/{ns}/{coll}", s.guard(s.collectionDeclare))
+	mux.HandleFunc("GET /v1/store/{ns}/{coll}", s.policed("read", s.storeList))
+	mux.HandleFunc("POST /v1/store/{ns}/{coll}", s.policed("create", s.storePut))
+	mux.HandleFunc("GET /v1/store/{ns}/{coll}/{id}", s.policed("read", s.storeGet))
+	mux.HandleFunc("PATCH /v1/store/{ns}/{coll}/{id}", s.policed("update", s.storePatch))
+	mux.HandleFunc("DELETE /v1/store/{ns}/{coll}/{id}", s.policed("delete", s.storeDelete))
 
 	s.authRoutes(mux)
 	s.filesRoutes(mux)
@@ -233,7 +239,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/kv/{key}", s.guard(s.kvSet))
 	mux.HandleFunc("DELETE /v1/kv/{key}", s.guard(s.kvDelete))
 
-	return mux
+	return withCORS(corsOrigins(), mux)
 }
 
 // handleHealth reports liveness, and means it.
@@ -291,13 +297,12 @@ func parseRef(w http.ResponseWriter, r *http.Request) (store.Ref, bool) {
 	return ref, true
 }
 
-func (s *Server) storeList(w http.ResponseWriter, r *http.Request) {
-	ref, ok := parseRef(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) storeList(w http.ResponseWriter, r *http.Request, ref store.Ref, d access.Decision) {
 	q := r.URL.Query()
-	var filters []store.Filter
+	// The scope filter goes in first, so a caller-supplied filter on the same
+	// field narrows the page further and can never widen it: the filters are
+	// ANDed, and there is no OR to escape through.
+	filters := d.Filter()
 	for field, vals := range q {
 		switch field {
 		case "limit", "offset", "order_by", "order", "by", "by_limit":
@@ -359,17 +364,28 @@ func (s *Server) storeList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) storePut(w http.ResponseWriter, r *http.Request) {
-	ref, ok := parseRef(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) storePut(w http.ResponseWriter, r *http.Request, ref store.Ref, d access.Decision) {
 	doc, err := decodeBody(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
 		return
 	}
-	rec, err := s.st.Put(ref, r.URL.Query().Get("id"), doc)
+	// A scoped create stamps its own tenancy from the token, overwriting
+	// whatever the body said. This is the half of the policy that removes
+	// bugs instead of catching them: a document cannot be written into
+	// somebody else's tenant, because the tenant is not something the client
+	// gets to state.
+	if d.Scoped() {
+		doc[d.Field] = d.Value
+	}
+	rec, err := s.st.PutIf(ref, r.URL.Query().Get("id"), doc, d.Filter())
+	if errors.Is(err, store.ErrNotFound) {
+		// A caller-supplied id that belongs to another tenant. It answers as
+		// a miss rather than a conflict, because "that id is taken" is itself
+		// something this caller may not know.
+		writeErr(w, http.StatusNotFound, "not_found", "record not found")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
@@ -377,12 +393,8 @@ func (s *Server) storePut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "record": rec})
 }
 
-func (s *Server) storeGet(w http.ResponseWriter, r *http.Request) {
-	ref, ok := parseRef(w, r)
-	if !ok {
-		return
-	}
-	rec, err := s.st.Get(ref, r.PathValue("id"))
+func (s *Server) storeGet(w http.ResponseWriter, r *http.Request, ref store.Ref, d access.Decision) {
+	rec, err := s.st.GetIf(ref, r.PathValue("id"), d.Filter())
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "not_found", err.Error())
 		return
@@ -394,11 +406,7 @@ func (s *Server) storeGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "record": rec})
 }
 
-func (s *Server) storePatch(w http.ResponseWriter, r *http.Request) {
-	ref, ok := parseRef(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) storePatch(w http.ResponseWriter, r *http.Request, ref store.Ref, d access.Decision) {
 	fields, err := decodeBody(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
@@ -418,9 +426,31 @@ func (s *Server) storePatch(w http.ResponseWriter, r *http.Request) {
 		}
 		opts.If[field] = want
 	}
+	// A scoped update is a precondition, not a check performed beside the
+	// write: PatchWith compare-and-sets against the document it merged from,
+	// so a document that changes owner mid-flight fails the write rather than
+	// passing a stale test.
+	if d.Scoped() {
+		if _, changes := fields[d.Field]; changes {
+			writeErr(w, http.StatusForbidden, "forbidden",
+				"a scoped caller cannot change "+d.Field+", the field that decides who owns this document")
+			return
+		}
+		if opts.If == nil {
+			opts.If = map[string]string{}
+		}
+		opts.If[d.Field] = d.Value
+	}
 	rec, err := s.st.PatchWith(ref, r.PathValue("id"), fields, opts)
 	if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrNoCollection) {
 		writeErr(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrPrecondition) && d.Scoped() {
+		// The caller may not see this document, so it must answer exactly as
+		// it would for one that does not exist. A 409 here would confirm the
+		// id is real to somebody with no right to know that.
+		writeErr(w, http.StatusNotFound, "not_found", "record not found")
 		return
 	}
 	if errors.Is(err, store.ErrPrecondition) || errors.Is(err, store.ErrConcurrent) {
@@ -434,12 +464,8 @@ func (s *Server) storePatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "record": rec})
 }
 
-func (s *Server) storeDelete(w http.ResponseWriter, r *http.Request) {
-	ref, ok := parseRef(w, r)
-	if !ok {
-		return
-	}
-	err := s.st.Delete(ref, r.PathValue("id"))
+func (s *Server) storeDelete(w http.ResponseWriter, r *http.Request, ref store.Ref, d access.Decision) {
+	err := s.st.DeleteIf(ref, r.PathValue("id"), d.Filter())
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "not_found", err.Error())
 		return

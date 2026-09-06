@@ -236,9 +236,32 @@ Ordering is `created_at`, then insertion order. The tiebreak matters because
 timestamps have second resolution: without it, documents written in the same
 second would be evicted arbitrarily.
 
-Retention is declared on the collection, so it is set from the CLI, like
-`--normalize`. There is no HTTP endpoint for creating collections yet, which
-means an HTTP-only consumer cannot declare one — see [Status](#status).
+Retention is declared on the collection, like `--normalize`, and a collection
+is declared either from the CLI or with `PUT /v1/store/<ns>/<coll>` — which is
+how a deployment behind a reverse proxy, with nobody logged into the box, gets
+one at all.
+
+## One place for an invariant
+
+A collection declares how its fields are normalized, and the store applies the
+rule on every write **and** to every filter value for the same field, so a
+lookup finds the row a normalized write created:
+
+```sh
+bkn store create app/users   --normalize email=trim_lower
+bkn store create app/reports --normalize declarant.email=trim_lower
+```
+
+A field may name a nested key with dots. The filter side already addressed
+documents that way (`--where declarant.email=...`), and until both halves
+agreed, a nested rule was accepted and then silently skipped on write — which
+left the document unfindable by the very field its collection declared as
+normalized, because the lookup value *was* normalized and the stored value was
+not.
+
+A path the store cannot address — array indices, quoting, wildcards — is
+**refused when declared** rather than accepted and ignored. Rule 5: fail
+loudly, never downgrade.
 
 ## Identity, without billing
 
@@ -266,6 +289,111 @@ a store collection:
 bkn store put billing/subjects --id <user-id> \
   --data '{"plan":"pro","status":"active","stripe_customer_id":"cus_x"}'
 ```
+
+## Collections that know who is asking
+
+Every data route used to require the admin token, so a browser or a phone
+could not talk to bkn at all. The application in between had to re-implement
+the same three lines — verify the token, read the subject, add the tenant
+filter — at every endpoint, and the day one of them was forgotten, that
+endpoint returned everybody's rows.
+
+A collection declares who may do what, and bkn enforces it:
+
+```sh
+bkn store create app/notes --owner-field user_id \
+  --access read=owner,create=owner,update=owner,delete=owner
+
+bkn store create app/docs  --org-field org_id --access read=org,create=org
+bkn store create site/pages --access read=public
+```
+
+Four verbs — `read` (get, list and count), `create`, `update`, `delete` — each
+mapped to one of five audiences:
+
+| audience | who | scoped to |
+|---|---|---|
+| `admin` | the admin token | everything |
+| `user` | any valid access token | everything |
+| `owner` | a token holder | documents whose `--owner-field` is them |
+| `org` | a token holder | documents whose `--org-field` matches their token's org |
+| `public` | anybody | everything |
+
+**`admin` is the default, so nothing changed for a collection nobody has
+spoken about.** A policy grants and never revokes: `--access read=public`
+leaves writes admin-only, because an undeclared verb is admin.
+
+The part that removes bugs rather than catching them is that a scoped create
+takes its tenancy **from the token, not from the body**:
+
+```sh
+curl -H "Authorization: Bearer $ADA" -d '{"title":"hi","user_id":"SOMEBODY-ELSE"}' \
+     $HOST/v1/store/app/notes
+# -> {"record":{"id":"...","title":"hi","user_id":"<ada's id>"}}
+```
+
+A document cannot be written into the wrong tenant, because the tenant is not
+something the client gets to say. The read side is the same idea: the scope is
+part of the query, not a check beside it, so `?user_id=someone-else` narrows an
+already-scoped page to nothing rather than widening it — filters are ANDed and
+there is no `OR` to escape through. A rollup (`?by=`) is scoped too, or it
+would leak the count of what you cannot read.
+
+Three refusals are worth stating, because each one is a way this normally goes
+wrong:
+
+- **A scoped read, patch or delete of another tenant's document answers 404**,
+  not 403. A 403 confirms the id is real to somebody with no right to know it.
+- **A caller-supplied id cannot take a document.** `POST ...?id=<theirs>` is an
+  upsert, and a create policy stamps your id onto it — so without a guard it
+  would replace their document and relabel it as yours. The insert and the
+  ownership test are one statement (`ON CONFLICT ... WHERE`), not a check
+  followed by a write.
+- **An `org` audience refuses a token carrying no organization.** Reading it as
+  "unscoped" would hand every tenant's documents to somebody who merely forgot
+  to pick one — the exact failure the mechanism exists to prevent.
+
+Scoped updates reuse machinery that was already there: the scope becomes a
+precondition on the compare-and-set that `patch` already performs, so a
+document that changes hands mid-flight fails the write instead of passing a
+stale test.
+
+This is admitted by the rule in [VISION.md](VISION.md#what-gets-in) — it
+removes a class of application code from *every* embedder, and userland cannot
+implement it safely, because a filter the caller has to remember to add is a
+filter somebody eventually forgets. What it is not is a rule language: an
+audience is one word from a closed set and a scope is a field name, never an
+expression, for the same reason the query surface refuses `OR`.
+
+### What an application needs besides the store
+
+Scoping the data was necessary and not sufficient. Three things were operator-
+only because the only client had ever been an operator:
+
+```sh
+POST /v1/auth/register          # self-service signup, off unless BKN_OPEN_SIGNUP=1
+POST /v1/auth/password          # change your own, verifying the current one
+POST /v1/auth/orgs              # create a workspace; the creator becomes owner
+POST /v1/auth/orgs/{org}/members    # invite, gated by org role, not by the admin token
+GET  /v1/auth/orgs/{org}/members
+DELETE /v1/auth/orgs/{org}/members/{user}
+PUT  /v1/store/{ns}/{coll}      # declare a collection: normalizers, retention, access
+```
+
+Registration will not let a caller name their own role, or it would be an
+admin-account vending machine, and it shares the login throttle, since it is
+the other way to learn whether an address has an account. Any signed-in user
+may create an organization and becomes its owner — that is the "create a
+workspace" move a product needs, and the deployment-level control over it is
+`BKN_OPEN_SIGNUP`: with signup closed, the only accounts that exist are ones an
+operator made. A password change
+verifies the current password rather than trusting the access token, because a
+stolen token is exactly the situation where it must not be enough.
+
+Browsers need one more thing: `BKN_CORS_ORIGIN` is an explicit allow-list,
+unset by default. It is not a reflected origin — bkn authenticates with a
+bearer header, and a permissive default would let any page on the internet
+spend a token it managed to obtain.
 
 ## Files
 
@@ -442,7 +570,9 @@ Built to the agent-first CLI spec family — <https://cli-specs.intrane.fr>.
 |---|---|
 | `BKN_DATA` | datastore path (default `~/.bkn/bkn.db`) |
 | `BKN_HOST` / `BKN_PORT` | serve bind defaults (`127.0.0.1` / `7799`); flags win |
-| `BKN_ADMIN_TOKEN` | bearer token gating every non-public HTTP route; **required** to bind off-loopback |
+| `BKN_ADMIN_TOKEN` | bearer token gating every admin HTTP route; **required** to bind off-loopback |
+| `BKN_CORS_ORIGIN` | comma-separated origin allow-list for browser callers (`*` permitted, and echoed rather than returned literally); unset means no cross-origin access |
+| `BKN_OPEN_SIGNUP` | `1` enables `POST /v1/auth/register` |
 | `BKN_FILES_DIR` | where local blobs live (default `~/.bkn/files`) |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | enable the `s3` backend; `BKN_S3_*` also accepted |
 | `BKN_AUTH_SECRET` | token signing secret; generated and stored in `kv` if unset |
@@ -559,5 +689,20 @@ $ curl -s -o /dev/null -w '%{http_code}\n' https://bkn.intrane.fr/v1/kv
 ## Status
 
 The core primitives — `store`, `kv`, `auth`, `files`, `events`, `cron`,
-`hooks`, `lock` and `script` — are complete and tested, and two real domains
+`hooks`, `lock` and `script` — are complete and tested, and nine real domains
 have been ported onto them.
+
+With collection access policies, a browser or mobile client can talk to bkn
+directly: identity, tenancy, self-service signup and workspace membership are
+all reachable over HTTP. Three things are honestly not:
+
+- **Files are not scoped.** A namespace is `--public` or admin-only; there is
+  no per-user upload, so avatars and user attachments still go through a hook
+  script that does its own checking.
+- **There is no realtime.** No websockets, no server-sent events. Anything
+  built on presence, live cursors or a chat feed is not a bkn application.
+- **There is no text search.** Filters are equality, ranges and `in`; a search
+  box over content has nothing to call.
+
+The first is a gap. The other two are scope decisions, and closing either one
+would be a different program.

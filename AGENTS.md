@@ -57,6 +57,13 @@ When this and rule 2 disagree, this wins.
 7. **The sandbox boundary must stay readable in one sitting.** Everything a
    script can reach is in `internal/script/host.go`. Keep it that way; a
    capability added anywhere else is a capability nobody will audit.
+8. **Authorization is decided in one place and applied inside the write.**
+   `access.Decide` is the only thing that says yes, and a handler cannot serve
+   a store request without being handed its Decision — so "forgot to check" is
+   not a shape the code can take. A scope is a filter passed to `GetIf`,
+   `PutIf`, `DeleteIf` or a patch precondition, never a comparison performed
+   next to the call: a check that is not part of the write is not a check, it
+   is a hope.
 
 ## Deliberate omissions
 
@@ -127,6 +134,8 @@ cmd_meta.go          guide, help-json, help
 internal/out/        output contract: envelopes, exit codes, typed errors
 internal/db/         SQLite open + schema; the one place a path is resolved
 internal/store/      collection primitive (six verbs) + ULID ids
+internal/access/     who may do what to a collection; pure, and the whole
+                     authorization matrix is one table in its test
 internal/kv/         settings primitive + AES-256-GCM keyring
 internal/guide/      embedded guide.json (go:embed) + markdown renderer
 internal/server/     HTTP routes, /_health, /_shutdown, /guide, /llms.txt

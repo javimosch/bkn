@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS file_namespaces (
   max_bytes   INTEGER NOT NULL DEFAULT 0,
   allow_types TEXT NOT NULL DEFAULT '[]',
   public      INTEGER NOT NULL DEFAULT 0,
+  verify_type INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL
 );
 
@@ -234,6 +235,7 @@ var addedColumns = []string{
 	`ALTER TABLE collections ADD COLUMN retain_last INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE collections ADD COLUMN retain_per TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE collections ADD COLUMN access TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE file_namespaces ADD COLUMN verify_type INTEGER NOT NULL DEFAULT 0`,
 }
 
 func addColumns(conn *sql.DB) error {

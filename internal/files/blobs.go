@@ -39,14 +39,6 @@ func (s *Store) Put(nsName, name string, r io.Reader, opts PutOptions) (File, er
 		return File{}, err
 	}
 
-	if !opts.Overwrite {
-		if _, err := s.Show(nsName, name); err == nil {
-			return File{}, ErrExists
-		} else if err != ErrNotFound {
-			return File{}, err
-		}
-	}
-
 	limit := ns.Limit()
 	// Read one byte past the limit so exceeding it is detectable rather than
 	// silently truncating the file to exactly the cap.
@@ -59,7 +51,40 @@ func (s *Store) Put(nsName, name string, r io.Reader, opts PutOptions) (File, er
 			ErrTooLarge, len(buf), limit, nsName)
 	}
 
+	// A namespace that verifies types decides from the bytes, and the
+	// uploader's claim decides nothing.
+	//
+	// Without this the allow-list is checked against a string the caller sent:
+	// declare Content-Type: image/png over any bytes at all and an image-only
+	// namespace accepts them and records them as an image. That was harmless
+	// while the only writer held the admin token. It stops being harmless the
+	// moment a tenant can upload, which is the direction this is heading.
+	//
+	// The cost is honest and worth stating: sniffing sees bytes, not
+	// intentions, so a namespace with VerifyType must allow-list what files
+	// look like rather than what they are called. A .docx IS a zip and sniffs
+	// as application/zip; a .css full of words sniffs as text/plain. A format
+	// that is a container of another format cannot be told apart this way by
+	// anyone, which is why a caller needing that distinction still validates
+	// it itself.
 	contentType := opts.ContentType
+	if ns.VerifyType {
+		sniffed := sniffContentType(buf)
+		if contentType == "" {
+			// Nothing was claimed, so the bytes are the only evidence. This is
+			// what stops an image-only namespace being filled with html by
+			// simply omitting the header and naming the file .png - the name
+			// is not evidence either.
+			contentType = sniffed
+		} else if !typesAgree(contentType, sniffed) {
+			return File{}, fmt.Errorf("%w: uploaded bytes look like %q, not the %q that was declared, "+
+				"and namespace %q verifies types",
+				ErrTypeMismatch, sniffed, contentType, nsName)
+		}
+		// A claim that survives typesAgree is kept: it is the more specific
+		// truth about bytes a sniffer can only call a zip, and it is what the
+		// allow-list and the serving header are written against.
+	}
 	if contentType == "" {
 		contentType = detectContentType(name, buf)
 	}
@@ -91,18 +116,100 @@ func (s *Store) Put(nsName, name string, r io.Reader, opts PutOptions) (File, er
 		Size: int64(len(buf)), ContentType: contentType, Backend: ns.Backend,
 		Metadata: meta, CreatedAt: now(), UpdatedAt: now(), location: location,
 	}
-	if _, err := s.db.Exec(`
-		INSERT INTO files (id, ns, name, sha256, size, content_type, backend, location, metadata, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(ns, name) DO UPDATE SET
+	// Claiming a name and writing it are one statement.
+	//
+	// This used to be a Show that returned ErrExists followed, some way down,
+	// by an unconditional upsert - so two uploads of the same new name both
+	// saw it free and both wrote, and the second silently replaced the first.
+	// The window is small and the consequence is not: the name still resolves,
+	// so nothing looks wrong, it just points at the other file. DO NOTHING
+	// plus a zero rows-affected turns that into ErrExists for whoever lost.
+	conflict := `DO UPDATE SET
 		  sha256=excluded.sha256, size=excluded.size, content_type=excluded.content_type,
 		  backend=excluded.backend, location=excluded.location,
-		  metadata=excluded.metadata, updated_at=excluded.updated_at`,
+		  metadata=excluded.metadata, updated_at=excluded.updated_at`
+	if !opts.Overwrite {
+		conflict = `DO NOTHING`
+	}
+	res, err := s.db.Exec(`
+		INSERT INTO files (id, ns, name, sha256, size, content_type, backend, location, metadata, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(ns, name) `+conflict,
 		f.ID, f.Namespace, f.Name, f.SHA256, f.Size, f.ContentType, f.Backend,
-		f.location, string(metaJSON), f.CreatedAt, f.UpdatedAt); err != nil {
+		f.location, string(metaJSON), f.CreatedAt, f.UpdatedAt)
+	if err != nil {
 		return File{}, err
 	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return File{}, ErrExists
+	}
 	return f, nil
+}
+
+// sniffContentType asks the bytes, ignoring the name. detectContentType
+// prefers the extension, which is fine for deciding how to serve a file the
+// operator put there and useless for verification - the extension is part of
+// what an uploader controls.
+func sniffContentType(buf []byte) string {
+	if len(buf) > 512 {
+		buf = buf[:512]
+	}
+	return strings.Split(httpDetect(buf), ";")[0]
+}
+
+// typesAgree reports whether a declared content type is consistent with what
+// the bytes sniff as.
+//
+// Exact equality is too strict to be usable: every OOXML document (.docx,
+// .xlsx, .pptx) is a zip, and a JPEG may be declared as the more specific
+// image/jpeg while sniffing identically. The rule is that a claim may be more
+// specific than the sniff within the same container, never a different kind of
+// thing - so image/png over zip bytes is refused, and the docx-over-zip case
+// that a byte sniffer genuinely cannot distinguish is allowed through.
+func typesAgree(declared, sniffed string) bool {
+	d := strings.ToLower(strings.TrimSpace(strings.Split(declared, ";")[0]))
+	s := strings.ToLower(strings.TrimSpace(strings.Split(sniffed, ";")[0]))
+	if d == s {
+		return true
+	}
+	// application/octet-stream is the sniffer saying "no idea", which is not
+	// evidence of a lie - and is the honest limit of this check. Arbitrary
+	// binary that resembles no known format can still be declared as anything
+	// the allow-list permits. What the check does remove is the whole class
+	// the sniffer CAN name: html, javascript, svg and every other text format
+	// that a browser would act on.
+	if s == "application/octet-stream" {
+		return true
+	}
+	if zipContainers[d] && s == "application/zip" {
+		return true
+	}
+	// text/plain covers every text format the sniffer cannot name: css, csv,
+	// json, markdown.
+	if s == "text/plain" && (strings.HasPrefix(d, "text/") || textLike[d]) {
+		return true
+	}
+	return false
+}
+
+// zipContainers are formats that are a zip archive underneath, so a sniffer
+// reports application/zip and cannot say more.
+var zipContainers = map[string]bool{
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   true,
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+	"application/vnd.oasis.opendocument.text":                                   true,
+	"application/vnd.oasis.opendocument.spreadsheet":                            true,
+	"application/epub+zip": true,
+	"application/zip":      true,
+}
+
+// textLike are text formats whose media type does not start with "text/".
+var textLike = map[string]bool{
+	"application/json":       true,
+	"application/xml":        true,
+	"application/javascript": true,
+	"image/svg+xml":          true,
 }
 
 // detectContentType prefers the extension and falls back to sniffing, because

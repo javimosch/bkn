@@ -175,17 +175,20 @@ func cmdFilesNS(fs *files.Store, args []string) {
 		backend := flags.String("backend", files.BackendLocal, strings.Join(files.Backends(), "|"))
 		maxBytes := flags.String("max-bytes", "0", "size cap per file (0 uses the default)")
 		public := flags.Bool("public", false, "serve these files over HTTP without auth")
+		verifyType := flags.Bool("verify-type", false,
+			"decide a file's type from its bytes, refusing an upload whose declared type disagrees")
 		var allow repeated
 		flags.Var(&allow, "allow-type", "permitted content type, repeatable (\"image/*\")")
 		pos := parseFlags(flags, rest)
-		need(pos, 1, "bkn files ns create <name> [--backend local|s3] [--max-bytes N] [--allow-type image/*] [--public]")
+		need(pos, 1, "bkn files ns create <name> [--backend local|s3] [--max-bytes N] [--allow-type image/*] [--public] [--verify-type]")
 
 		n, err := strconv.ParseInt(*maxBytes, 10, 64)
 		if err != nil || n < 0 {
 			out.Fail(out.InvalidValue, "invalid_value", "--max-bytes must be a non-negative integer")
 		}
 		ns, err := fs.EnsureNamespace(files.Namespace{
-			Name: pos[0], Backend: *backend, MaxBytes: n, AllowTypes: allow, Public: *public,
+			Name: pos[0], Backend: *backend, MaxBytes: n, AllowTypes: allow,
+			Public: *public, VerifyType: *verifyType,
 		})
 		if err != nil {
 			failFiles(err)

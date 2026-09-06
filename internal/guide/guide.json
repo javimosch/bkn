@@ -59,7 +59,8 @@
     "rollup": "store count answers how many, not which. With --by <field> it returns one bucket per distinct value, largest first, alongside total (documents matching) and groups (distinct values before any limit) so truncation is visible. A document with no value for the field gets a null key, which is different from an empty string. It composes with --where, so the filter applies before the grouping. One field, one aggregate: no expressions, no having, no joins, and it never returns documents.",
     "access policy": "What a collection allows a non-admin caller to do, declared on the collection: a verb (read, create, update, delete) mapped to an audience (admin, user, owner, org, public). Undeclared means admin-only, so a collection nobody has spoken about behaves exactly as it always did. 'owner' and 'org' also scope: they need --owner-field or --org-field naming the document field that holds the user or org id, and bkn applies that as part of every read and write rather than as a check beside it.",
     "scope stamping": "On a scoped create, bkn writes the caller's own user or org id into the scope field, overwriting whatever the body said. A document cannot be created into somebody else's tenant, because the tenant is not something the client gets to state.",
-    "normalizers": "A collection declares field normalization (lower, upper, trim, trim_lower). The store applies it on every write AND to every filter value for the same field, so a lookup finds the row a normalized write created. A field may name a nested key with dots, e.g. declarant.email. A path the store cannot address (array indices, quoting, wildcards) is rejected when declared rather than silently ignored."
+    "normalizers": "A collection declares field normalization (lower, upper, trim, trim_lower). The store applies it on every write AND to every filter value for the same field, so a lookup finds the row a normalized write created. A field may name a nested key with dots, e.g. declarant.email. A path the store cannot address (array indices, quoting, wildcards) is rejected when declared rather than silently ignored.",
+    "verify-type": "A namespace flag that makes bkn decide a file's type from its bytes instead of from what the uploader declared, refusing an upload whose declared type disagrees. Off by default. Without it the allow-list is checked against a string the caller sent, which is fine while only the admin token can write and not fine once a tenant can. It sniffs bytes, not intentions: a .docx IS a zip and sniffs as application/zip, so a namespace using this allow-lists what files look like rather than what they are called."
   },
   "commands": {
     "store": [
@@ -126,7 +127,7 @@
       "bkn auth member list <org>"
     ],
     "files": [
-      "bkn files ns create <name> [--backend local|s3] [--max-bytes <n>] [--allow-type <type>] [--public]",
+      "bkn files ns create <name> [--backend local|s3] [--max-bytes <n>] [--allow-type <type>] [--public] [--verify-type]",
       "bkn files ns list",
       "bkn files ns delete <name>",
       "bkn files put <namespace> <path> [--name <n>] [--content-type <t>] [--meta <json>] [--overwrite]",
@@ -424,7 +425,8 @@
     "An access policy grants, it never revokes. Declaring read=public leaves create, update and delete admin-only, because an undeclared verb is admin.",
     "An 'org' audience refuses a token that carries no organization rather than treating it as unscoped. Sign in with --org, or call /v1/auth/switch-org.",
     "Cross-origin browser calls need BKN_CORS_ORIGIN set to an explicit allow-list. It is unset by default, which means no browser on another origin can call the API at all.",
-    "Self-service registration is off unless BKN_OPEN_SIGNUP=1. An open registration endpoint is a property of the deployment, not of whoever last held a token."
+    "Self-service registration is off unless BKN_OPEN_SIGNUP=1. An open registration endpoint is a property of the deployment, not of whoever last held a token.",
+    "files put refuses an existing name with 409 already_exists unless --overwrite. The claim and the write are one statement, so two uploads racing for the same new name give one success and one already_exists rather than one silently replacing the other."
   ],
   "see_also": [
     "bkn help-json",

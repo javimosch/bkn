@@ -41,6 +41,8 @@ func filesStatus(err error) (int, string) {
 		return http.StatusRequestEntityTooLarge, "too_large"
 	case errors.Is(err, files.ErrTypeRefused):
 		return http.StatusUnsupportedMediaType, "type_refused"
+	case errors.Is(err, files.ErrTypeMismatch):
+		return http.StatusUnsupportedMediaType, "type_mismatch"
 	case errors.Is(err, files.ErrBadName), errors.Is(err, files.ErrBadNamespace),
 		errors.Is(err, files.ErrBadBackend):
 		return http.StatusBadRequest, "validation_error"

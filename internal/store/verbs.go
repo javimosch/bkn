@@ -527,3 +527,117 @@ func (s *Store) Delete(r Ref, id string) error {
 	}
 	return nil
 }
+
+// DeleteIf removes a document only when it also matches every filter, in one
+// statement. A scoped caller deletes through this rather than through a Get
+// followed by a Delete, because between those two calls the document could
+// have changed owner - and a check that is not part of the write is not a
+// check, it is a hope.
+//
+// A document that exists but does not match returns ErrNotFound, exactly like
+// one that does not exist. Distinguishing them would tell an unauthorized
+// caller that the id is real.
+func (s *Store) DeleteIf(r Ref, id string, filters []Filter) error {
+	if len(filters) == 0 {
+		return s.Delete(r, id)
+	}
+	c, err := s.getCollection(r)
+	if err != nil {
+		return err
+	}
+	clause, args, err := s.whereClause(c, filters)
+	if err != nil {
+		return err
+	}
+	q := `DELETE FROM records WHERE ns=? AND coll=? AND id=?` + clause
+	res, err := s.db.Exec(q, append([]any{r.NS, r.Coll, id}, args...)...)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetIf returns a document only when it also matches every filter, so a
+// scoped read of somebody else's document is indistinguishable from a read of
+// one that was never written.
+func (s *Store) GetIf(r Ref, id string, filters []Filter) (Record, error) {
+	if len(filters) == 0 {
+		return s.Get(r, id)
+	}
+	recs, err := s.List(r, ListOptions{
+		Filters: append([]Filter{{Field: "id", Op: OpEq, Value: id}}, filters...),
+		Limit:   1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(recs) == 0 {
+		return nil, ErrNotFound
+	}
+	return recs[0], nil
+}
+
+// PutIf is an upsert that a scoped caller can be trusted with: it inserts when
+// the id is free, and overwrites only when the document already there matches
+// every filter.
+//
+// Without it, a caller-supplied id is a way to take somebody else's document.
+// A create policy stamps the new document with the caller's own tenancy, so
+// POSTing the id of a document belonging to another tenant would replace its
+// contents and relabel it as yours. Checking first and writing second leaves a
+// window; SQLite's conflict clause closes it, because the condition is
+// evaluated against the row being replaced as part of the replacement.
+//
+// A conflicting document that does not match returns ErrNotFound, for the same
+// reason GetIf does: the caller has no right to learn that the id is taken.
+func (s *Store) PutIf(r Ref, id string, doc map[string]any, filters []Filter) (Record, error) {
+	if len(filters) == 0 {
+		return s.Put(r, id, doc)
+	}
+	if doc == nil {
+		return nil, ErrBadDoc
+	}
+	c, err := s.EnsureCollection(r, nil)
+	if err != nil {
+		return nil, err
+	}
+	id, doc = splitID(doc, id)
+	if err := applyNormalizers(c.Normalize, doc); err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return nil, ErrBadDoc
+	}
+	clause, args, err := s.whereClause(c, filters)
+	if err != nil {
+		return nil, err
+	}
+	// whereClause emits a run of " AND <cond>" for use after an existing
+	// predicate; here it is the whole condition, so the first AND goes.
+	cond := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(clause), "AND"))
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	q := `
+		INSERT INTO records (ns, coll, id, doc, created_at, updated_at) VALUES (?,?,?,?,?,?)
+		ON CONFLICT(ns, coll, id) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at
+		WHERE ` + cond
+	res, err := s.db.Exec(q, append([]any{r.NS, r.Coll, id, string(b), now, now}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrNotFound
+	}
+	if _, err := s.enforce(r, c, doc); err != nil {
+		return nil, err
+	}
+	return decode(id, string(b))
+}

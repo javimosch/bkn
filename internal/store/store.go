@@ -67,6 +67,7 @@ type Collection struct {
 	Ref       string            `json:"ref"`
 	Normalize map[string]string `json:"normalize"`
 	Retain    Retention         `json:"retain,omitzero"`
+	Access    Access            `json:"access,omitzero"`
 	CreatedAt string            `json:"created_at"`
 	Count     int               `json:"count,omitempty"`
 }
@@ -179,10 +180,10 @@ func (s *Store) EnsureCollectionWith(r Ref, rules map[string]string, retain Rete
 }
 
 func (s *Store) getCollection(r Ref) (Collection, error) {
-	var raw, created, per string
+	var raw, created, per, acc string
 	var last int
-	err := s.db.QueryRow(`SELECT normalize, retain_last, retain_per, created_at FROM collections WHERE ns=? AND name=?`,
-		r.NS, r.Coll).Scan(&raw, &last, &per, &created)
+	err := s.db.QueryRow(`SELECT normalize, retain_last, retain_per, access, created_at FROM collections WHERE ns=? AND name=?`,
+		r.NS, r.Coll).Scan(&raw, &last, &per, &acc, &created)
 	if err == sql.ErrNoRows {
 		return Collection{}, ErrNoCollection
 	}
@@ -191,12 +192,57 @@ func (s *Store) getCollection(r Ref) (Collection, error) {
 	}
 	rules := map[string]string{}
 	_ = json.Unmarshal([]byte(raw), &rules)
-	return Collection{Ref: r.String(), Normalize: rules, Retain: decodeRetention(last, per), CreatedAt: created}, nil
+	return Collection{Ref: r.String(), Normalize: rules, Retain: decodeRetention(last, per),
+		Access: decodeAccess(acc), CreatedAt: created}, nil
+}
+
+// Describe returns a collection's declared rules, or ErrNoCollection. The
+// server needs the access policy before it can decide whether the caller may
+// do the thing they are asking for, so this is the one read that happens
+// ahead of authorization rather than after it.
+func (s *Store) Describe(r Ref) (Collection, error) { return s.getCollection(r) }
+
+// SetAccess declares (or clears) a collection's authorization policy. It is a
+// separate operation from EnsureCollection because a policy is normally set
+// once, on a collection that already exists, and because an ordinary write
+// must never be able to touch it.
+func (s *Store) SetAccess(r Ref, a Access) (Collection, error) {
+	if err := a.Validate(); err != nil {
+		return Collection{}, err
+	}
+	if _, err := s.getCollection(r); err != nil {
+		return Collection{}, err
+	}
+	if _, err := s.db.Exec(`UPDATE collections SET access=? WHERE ns=? AND name=?`,
+		encodeAccess(a), r.NS, r.Coll); err != nil {
+		return Collection{}, err
+	}
+	return s.getCollection(r)
+}
+
+func encodeAccess(a Access) string {
+	if a.IsZero() {
+		return "{}"
+	}
+	b, err := json.Marshal(a)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func decodeAccess(raw string) Access {
+	var a Access
+	if raw == "" {
+		return a
+	}
+	_ = json.Unmarshal([]byte(raw), &a)
+	return a
 }
 
 // Collections lists every collection, optionally filtered to one namespace.
 func (s *Store) Collections(ns string) ([]Collection, error) {
-	q := `SELECT c.ns, c.name, c.normalize, c.retain_last, c.retain_per, c.created_at,
+	q := `SELECT c.ns, c.name, c.normalize, c.retain_last, c.retain_per, c.access, c.created_at,
 	             (SELECT COUNT(*) FROM records r WHERE r.ns=c.ns AND r.coll=c.name)
 	      FROM collections c`
 	var args []any
@@ -213,15 +259,16 @@ func (s *Store) Collections(ns string) ([]Collection, error) {
 
 	out := []Collection{}
 	for rows.Next() {
-		var n, name, raw, per, created string
+		var n, name, raw, per, acc, created string
 		var last, count int
-		if err := rows.Scan(&n, &name, &raw, &last, &per, &created, &count); err != nil {
+		if err := rows.Scan(&n, &name, &raw, &last, &per, &acc, &created, &count); err != nil {
 			return nil, err
 		}
 		rules := map[string]string{}
 		_ = json.Unmarshal([]byte(raw), &rules)
 		out = append(out, Collection{Ref: n + "/" + name, Normalize: rules,
-			Retain: decodeRetention(last, per), CreatedAt: created, Count: count})
+			Retain: decodeRetention(last, per), Access: decodeAccess(acc),
+			CreatedAt: created, Count: count})
 	}
 	return out, rows.Err()
 }

@@ -173,6 +173,9 @@ func failStore(err error) {
 	case errors.Is(err, store.ErrBadGroupBy):
 		out.Fail(out.InvalidValue, "invalid_group_by", err.Error(),
 			"bkn store count app/runs --by status")
+	case errors.Is(err, store.ErrBadAccess):
+		out.Fail(out.InvalidValue, "invalid_access", err.Error(),
+			"bkn store access app/notes --access read=owner --owner-field user_id")
 	case errors.Is(err, store.ErrBadRetention):
 		out.Fail(out.InvalidValue, "invalid_retention", err.Error(),
 			"bkn store create app/runs --retain-last 500 --retain-per tag")

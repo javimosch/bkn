@@ -61,7 +61,7 @@ func helpJSON() map[string]any {
 			"version":            c(none, none),
 			"help-json":          c(none, none),
 			"guide":              c(none, []string{"--human"}),
-			"store create":       c([]string{"ref"}, []string{"--normalize <field=rule>", "--retain-last <n>", "--retain-per <field>"}),
+			"store create":       c([]string{"ref"}, []string{"--normalize <field[.nested]=rule>", "--retain-last <n>", "--retain-per <field>"}),
 			"store put":          c([]string{"ref"}, []string{"--data <json|@file|->", "--id <id>", "--if-absent"}),
 			"store get":          c([]string{"ref", "id"}, none),
 			"store find":         c([]string{"ref"}, []string{"--where <predicate>"}),

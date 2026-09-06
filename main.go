@@ -176,6 +176,9 @@ func failStore(err error) {
 	case errors.Is(err, store.ErrBadRetention):
 		out.Fail(out.InvalidValue, "invalid_retention", err.Error(),
 			"bkn store create app/runs --retain-last 500 --retain-per tag")
+	case errors.Is(err, store.ErrBadNormalizerField):
+		out.Fail(out.InvalidValue, "invalid_normalizer_field", err.Error(),
+			"bkn store create app/users --normalize declarant.email=trim_lower")
 	case errors.Is(err, store.ErrBadNormalizer):
 		out.Fail(out.InvalidValue, "invalid_normalizer", err.Error(),
 			"valid normalizers: "+strings.Join(store.ValidNormalizers(), ", "))

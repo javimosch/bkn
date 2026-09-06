@@ -96,23 +96,96 @@ func normalize(rule, v string) (string, error) {
 
 func ValidNormalizers() []string { return []string{"lower", "upper", "trim", "trim_lower"} }
 
+// ErrBadNormalizerField is a normalizer declared on a field path the store
+// cannot address.
+var ErrBadNormalizerField = errors.New("invalid normalizer field")
+
+// validNormalizerField rejects a path the store could accept and then quietly
+// fail to apply. Dots separate object keys; anything else that would need a
+// real JSON-path parser - array indices, quoting, wildcards - is refused at
+// declaration time rather than ignored at write time.
+func validNormalizerField(field string) error {
+	if field == "" {
+		return fmt.Errorf("%w: empty field name", ErrBadNormalizerField)
+	}
+	if strings.ContainsAny(field, "$[]'\"* ") {
+		return fmt.Errorf("%w: %q - only object keys separated by dots are supported", ErrBadNormalizerField, field)
+	}
+	for _, segment := range strings.Split(field, ".") {
+		if segment == "" {
+			return fmt.Errorf("%w: %q has an empty path segment", ErrBadNormalizerField, field)
+		}
+	}
+	return nil
+}
+
+// applyNormalizers rewrites declared fields in place.
+//
+// A field may name a nested key with dots - "declarant.email" - because the
+// filter side already addresses documents that way: whereClause builds
+// "$."+field for json_extract, and normalizes the filter value using this same
+// rule map. Before this walked the path, the two halves disagreed: a lookup
+// value was normalized while the stored value was not, so a document was
+// unfindable by the very field its collection declared as normalized.
 func applyNormalizers(rules map[string]string, doc map[string]any) error {
 	for field, rule := range rules {
-		raw, ok := doc[field]
+		// A literal key wins when one exists, so a document that really does
+		// hold a key containing a dot keeps behaving as it did.
+		if raw, ok := doc[field]; ok {
+			n, err := normalizeIfString(rule, raw)
+			if err != nil {
+				return err
+			}
+			if n != nil {
+				doc[field] = n
+			}
+			continue
+		}
+
+		segments := strings.Split(field, ".")
+		if len(segments) == 1 {
+			continue // absent top-level field: nothing to normalize
+		}
+		parent := doc
+		for _, segment := range segments[:len(segments)-1] {
+			next, ok := parent[segment].(map[string]any)
+			if !ok {
+				parent = nil // path does not exist, or is not an object
+				break
+			}
+			parent = next
+		}
+		if parent == nil {
+			continue
+		}
+		leaf := segments[len(segments)-1]
+		raw, ok := parent[leaf]
 		if !ok {
 			continue
 		}
-		s, ok := raw.(string)
-		if !ok {
-			continue // normalizers apply to strings only; other types pass through
-		}
-		n, err := normalize(rule, s)
+		n, err := normalizeIfString(rule, raw)
 		if err != nil {
 			return err
 		}
-		doc[field] = n
+		if n != nil {
+			parent[leaf] = n
+		}
 	}
 	return nil
+}
+
+// normalizeIfString returns the normalized value, or nil when the value is not
+// a string - normalizers apply to strings only; other types pass through.
+func normalizeIfString(rule string, raw any) (any, error) {
+	s, ok := raw.(string)
+	if !ok {
+		return nil, nil
+	}
+	n, err := normalize(rule, s)
+	if err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // --- collections ----------------------------------------------------------
@@ -128,7 +201,10 @@ func (s *Store) EnsureCollection(r Ref, rules map[string]string) (Collection, er
 // which calls EnsureCollection - can never silently drop the bound somebody
 // declared.
 func (s *Store) EnsureCollectionWith(r Ref, rules map[string]string, retain Retention, setRetain bool) (Collection, error) {
-	for _, rule := range rules {
+	for field, rule := range rules {
+		if err := validNormalizerField(field); err != nil {
+			return Collection{}, err
+		}
 		if _, err := normalize(rule, ""); err != nil {
 			return Collection{}, err
 		}

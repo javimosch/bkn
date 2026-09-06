@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/javimosch/bkn/internal/access"
@@ -165,5 +166,22 @@ func TestAdminOnlyIsNotAnAuthenticationProblem(t *testing.T) {
 		if d.NeedsAuth {
 			t.Errorf("%s: admin-only read reported as fixable by authenticating", c.Kind)
 		}
+	}
+}
+
+// A normalizer may name a nested key with dots; a scope field may not, and the
+// coupling is the reason. The read side would address "$.declarant.user_id"
+// through json_extract while a scoped create stamps the value with a literal
+// map write, producing a top-level key of that name — so the document would be
+// invisible to its own owner. This test exists so that anyone adding nested
+// scope fields has to teach the stamp to walk the path in the same change.
+func TestNestedScopeFieldIsRefusedUntilTheStampCanWalkAPath(t *testing.T) {
+	a := store.Access{OwnerField: "declarant.user_id", Rules: map[string]string{"read": "owner"}}
+	err := a.Validate()
+	if err == nil {
+		t.Fatal("a nested scope field was accepted; the create side stamps a literal key and cannot honour it")
+	}
+	if !strings.Contains(err.Error(), "top-level") {
+		t.Errorf("the refusal should say why, got: %v", err)
 	}
 }

@@ -241,6 +241,28 @@ is declared either from the CLI or with `PUT /v1/store/<ns>/<coll>` — which is
 how a deployment behind a reverse proxy, with nobody logged into the box, gets
 one at all.
 
+## One place for an invariant
+
+A collection declares how its fields are normalized, and the store applies the
+rule on every write **and** to every filter value for the same field, so a
+lookup finds the row a normalized write created:
+
+```sh
+bkn store create app/users   --normalize email=trim_lower
+bkn store create app/reports --normalize declarant.email=trim_lower
+```
+
+A field may name a nested key with dots. The filter side already addressed
+documents that way (`--where declarant.email=...`), and until both halves
+agreed, a nested rule was accepted and then silently skipped on write — which
+left the document unfindable by the very field its collection declared as
+normalized, because the lookup value *was* normalized and the stored value was
+not.
+
+A path the store cannot address — array indices, quoting, wildcards — is
+**refused when declared** rather than accepted and ignored. Rule 5: fail
+loudly, never downgrade.
+
 ## Identity, without billing
 
 `auth` holds users, organizations, memberships and tokens. Emails are

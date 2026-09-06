@@ -104,9 +104,24 @@ func (a Access) Validate() error {
 		}
 	}
 	for _, f := range []string{a.OwnerField, a.OrgField} {
-		if f != "" && !identRe.MatchString(f) {
-			return fmt.Errorf("%w: scope field %q must match %s", ErrBadAccess, f, identRe)
+		if f == "" || identRe.MatchString(f) {
+			continue
 		}
+		// A normalizer may name a nested key with dots, so somebody will try
+		// it here. A scope field may not, and the reason is worth stating
+		// rather than answering with a regex: the read side would address
+		// "$.declarant.user_id" through json_extract while the create side
+		// stamps the value with a literal doc[field] write, producing a
+		// top-level key of that name. The two halves would disagree exactly
+		// the way a nested normalizer used to - except here the document
+		// would be invisible to its own owner. Supporting this means teaching
+		// the stamp to walk the path first.
+		if strings.Contains(f, ".") {
+			return fmt.Errorf("%w: scope field %q must be a top-level field; a scoped create writes it directly, "+
+				"so a nested path would be stamped as a literal key and never match the filter that reads it",
+				ErrBadAccess, f)
+		}
+		return fmt.Errorf("%w: scope field %q must match %s", ErrBadAccess, f, identRe)
 	}
 	return nil
 }

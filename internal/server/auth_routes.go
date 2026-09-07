@@ -110,6 +110,7 @@ func (s *Server) authRoutes(mux *http.ServeMux) {
 	// Administration of identities is operator work, not user work.
 	mux.HandleFunc("GET /v1/auth/users", s.guard(s.authListUsers))
 	mux.HandleFunc("POST /v1/auth/users", s.guard(s.authCreateUser))
+	mux.HandleFunc("PATCH /v1/auth/users/{user}", s.guard(s.authUpdateUser))
 	mux.HandleFunc("GET /v1/auth/orgs", s.guard(s.authListOrgs))
 }
 
@@ -236,6 +237,56 @@ func (s *Server) authCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "user": u})
+}
+
+// authUpdateUser is the operator's reset button. Creating a user was already
+// possible over HTTP while changing one was not, so an operator whose user had
+// forgotten their password had to go and find a shell on the box — the exact
+// gap that made the rest of the identity surface only half usable remotely.
+//
+// It is admin-gated and deliberately separate from /v1/auth/password, which is
+// a user changing their OWN password and must prove the current one. This one
+// proves nothing about the user because it is not the user asking.
+//
+// Only the fields present are changed. Setting a password revokes that user's
+// refresh sessions, so `sessions_revoked` means exactly that and no more: the
+// access token already in a client's hands is a stateless JWT and stays valid
+// until it expires (AccessTTL, 15 minutes). Treat that as the containment
+// window after a leak -- this closes the door, it does not evict whoever is
+// already inside.
+func (s *Server) authUpdateUser(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeBody(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "body must be a JSON object")
+		return
+	}
+	var name, role, password *string
+	var disabled *bool
+	if v, ok := body["name"].(string); ok {
+		name = &v
+	}
+	if v, ok := body["role"].(string); ok {
+		role = &v
+	}
+	if v, ok := body["password"].(string); ok {
+		password = &v
+	}
+	if v, ok := body["disabled"].(bool); ok {
+		disabled = &v
+	}
+	if name == nil && role == nil && password == nil && disabled == nil {
+		writeErr(w, http.StatusBadRequest, "validation_error",
+			"give at least one of name, role, password, disabled")
+		return
+	}
+	u, err := s.auth.UpdateUser(r.PathValue("user"), name, role, password, disabled)
+	if err != nil {
+		status, typ := authStatus(err)
+		writeErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "user": u,
+		"sessions_revoked": password != nil})
 }
 
 func (s *Server) authListOrgs(w http.ResponseWriter, r *http.Request) {

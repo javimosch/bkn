@@ -76,7 +76,7 @@ type Namespace struct {
 	Public     bool     `json:"public"`
 	// VerifyType makes the namespace decide a file's type from its bytes
 	// rather than from what the uploader claimed. See Put.
-	VerifyType bool   `json:"verify_type,omitempty"`
+	VerifyType bool `json:"verify_type,omitempty"`
 	// SigningKey enables signed URLs for a private namespace. When set,
 	// filesServe accepts ?sig=...&exp=... query params verified with this key.
 	// Empty means no signed access (private namespaces require auth, public ones

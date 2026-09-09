@@ -2,6 +2,7 @@ package script_test
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -246,7 +247,7 @@ func TestUpdateOnlyChangesWhatIsPassed(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	code := "function main(){ return 1 }"
-	got, err := reg.Update("keeper", &code, nil, nil, nil, nil)
+	got, err := reg.Update("keeper", &code, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -264,7 +265,7 @@ func TestDisabledScriptsDoNotRun(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	no := false
-	if _, err := reg.Update("off", nil, nil, nil, nil, &no); err != nil {
+	if _, err := reg.Update("off", nil, nil, nil, nil, &no, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if _, err := runner.Run("off", nil); err != script.ErrDisabled {
@@ -284,5 +285,111 @@ func TestDuplicateNameAndBadNameAreRejected(t *testing.T) {
 		if _, err := reg.Create(script.Script{Name: bad, Code: "function main(){}"}); err == nil {
 			t.Errorf("Create accepted the bad name %q", bad)
 		}
+	}
+}
+
+// The run audience set is closed, and "owner" is refused rather than accepted
+// as a synonym for "user". A script has no owner field to scope by, so the
+// store's owner rule would degrade to "any signed-in user" while reading as
+// something much narrower -- a policy that quietly means more than it says.
+func TestValidateRunAccess(t *testing.T) {
+	for _, ok := range []string{"", "admin", "user", "org", "public"} {
+		if err := script.ValidateRunAccess(ok); err != nil {
+			t.Fatalf("%q should be accepted: %v", ok, err)
+		}
+	}
+	err := script.ValidateRunAccess("owner")
+	if err == nil || !errors.Is(err, script.ErrBadAccess) {
+		t.Fatalf("owner should be refused, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "any signed-in user") {
+		t.Fatalf("the refusal should say what it would have meant: %v", err)
+	}
+	if err := script.ValidateRunAccess("everyone"); !errors.Is(err, script.ErrBadAccess) {
+		t.Fatalf("an unknown audience should be refused, got %v", err)
+	}
+}
+
+// A script that existed before this field must keep the permissions it had.
+func TestRunAccessDefaultsToAdmin(t *testing.T) {
+	reg, _, _ := setup(t)
+	s, err := reg.Create(script.Script{Name: "legacy", Code: "function main(){return 1}"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if s.RunAccess != "" {
+		t.Fatalf("a script with no declared audience must stay admin-only, got %q", s.RunAccess)
+	}
+	got, err := reg.Get("legacy")
+	if err != nil || got.RunAccess != "" {
+		t.Fatalf("round trip changed the audience: %q %v", got.RunAccess, err)
+	}
+}
+
+func TestRunAccessRoundTripsAndUpdates(t *testing.T) {
+	reg, _, _ := setup(t)
+	if _, err := reg.Create(script.Script{
+		Name: "open", Code: "function main(){return 1}", RunAccess: script.RunUser,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := reg.Get("open")
+	if err != nil || got.RunAccess != script.RunUser {
+		t.Fatalf("stored audience wrong: %q %v", got.RunAccess, err)
+	}
+	list, err := reg.List()
+	if err != nil || len(list) != 1 || list[0].RunAccess != script.RunUser {
+		t.Fatalf("list lost the audience: %+v %v", list, err)
+	}
+
+	admin := script.RunAdmin
+	if _, err := reg.Update("open", nil, nil, nil, nil, nil, &admin); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ := reg.Get("open"); got.RunAccess != script.RunAdmin {
+		t.Fatalf("update did not close it again: %q", got.RunAccess)
+	}
+
+	bad := "owner"
+	if _, err := reg.Update("open", nil, nil, nil, nil, nil, &bad); !errors.Is(err, script.ErrBadAccess) {
+		t.Fatalf("update should refuse owner, got %v", err)
+	}
+
+	// An unrelated edit must not disturb the audience: opening a script is a
+	// decision, and a code change is not a place to make it by accident.
+	code := "function main(){return 2}"
+	if _, err := reg.Update("open", &code, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("code update: %v", err)
+	}
+	if got, _ := reg.Get("open"); got.RunAccess != script.RunAdmin {
+		t.Fatalf("a code edit changed the audience to %q", got.RunAccess)
+	}
+}
+
+// A user-runnable script is only useful if it can tell who is calling it:
+// the policy decides whether you may run it, the script decides what you see.
+func TestScriptSeesItsCaller(t *testing.T) {
+	_, runner, _ := setup(t)
+	s := script.Script{
+		Name: "whoami", TimeoutMS: 2000,
+		Code: `function main(){ return {kind: bkn.caller.kind, sub: bkn.caller.sub, org: bkn.caller.org} }`,
+	}
+	res, err := runner.ExecAs(s, nil, script.Caller{Kind: "user", Sub: "u1", Org: "acme"})
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	got, _ := res.Value.(map[string]any)
+	if got["kind"] != "user" || got["sub"] != "u1" || got["org"] != "acme" {
+		t.Fatalf("caller not visible to the script: %+v (%s)", got, res.Run.Error)
+	}
+
+	// A scheduled run has no user, and must say so rather than borrow one.
+	res, err = runner.Exec(s, nil)
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	got, _ = res.Value.(map[string]any)
+	if got["kind"] != "system" || got["sub"] != "" {
+		t.Fatalf("an internal run should report the system caller: %+v", got)
 	}
 }

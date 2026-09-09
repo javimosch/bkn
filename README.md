@@ -39,6 +39,7 @@ echo -n 'correct-horse-battery' | bkn auth login ada@example.io --password-stdin
 bkn script test --file digest.js --input '{"limit":10}'
 bkn script create waitlist-digest --file digest.js
 bkn script run waitlist-digest
+bkn script update waitlist-digest --run-access user   # signed-in callers may run it over HTTP
 
 bkn daemon start          # the same primitives over HTTP
 curl -s localhost:7799/_health

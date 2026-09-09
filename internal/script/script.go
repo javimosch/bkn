@@ -23,10 +23,11 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("script not found")
-	ErrExists   = errors.New("script already exists")
-	ErrBadName  = errors.New("script name must match [a-z][a-z0-9_-]{0,62}")
-	ErrDisabled = errors.New("script is disabled")
+	ErrBadAccess = errors.New("invalid run access")
+	ErrNotFound  = errors.New("script not found")
+	ErrExists    = errors.New("script already exists")
+	ErrBadName   = errors.New("script name must match [a-z][a-z0-9_-]{0,62}")
+	ErrDisabled  = errors.New("script is disabled")
 )
 
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
@@ -43,9 +44,62 @@ type Script struct {
 	TimeoutMS   int      `json:"timeout_ms"`
 	AllowNet    []string `json:"allow_net"`
 	Enabled     bool     `json:"enabled"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	// RunAccess is who may execute this script over HTTP. Empty means admin,
+	// so every script that existed before this field did keeps exactly the
+	// permissions it had.
+	//
+	// It is per-script rather than global because a script is a capability:
+	// the code is written by an operator and reviewed once, and opening one
+	// of them to signed-in users says nothing about the others.
+	RunAccess string `json:"run_access,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
+
+// Run audiences. The set is closed, and deliberately smaller than the store's.
+//
+// "owner" is absent and refused on purpose. A script is not a document: there
+// is no owner field to scope by, so the store's owner rule would degrade to
+// "any signed-in user" while reading as something much narrower. A policy
+// that quietly means more than it says is worse than no policy.
+const (
+	RunAdmin  = "admin"
+	RunUser   = "user"
+	RunOrg    = "org"
+	RunPublic = "public"
+)
+
+// RunAudiences lists the accepted values, least to most open.
+func RunAudiences() []string { return []string{RunAdmin, RunUser, RunOrg, RunPublic} }
+
+// ValidateRunAccess checks a declared audience.
+func ValidateRunAccess(v string) error {
+	if v == "" {
+		return nil
+	}
+	for _, a := range RunAudiences() {
+		if v == a {
+			return nil
+		}
+	}
+	if v == "owner" {
+		return fmt.Errorf(`%w: "owner" does not apply to a script; a script has no owner field `+
+			`to scope by, and allowing it would silently mean "any signed-in user"`, ErrBadAccess)
+	}
+	return fmt.Errorf("%w: run access must be one of %s", ErrBadAccess, strings.Join(RunAudiences(), ", "))
+}
+
+// Caller is who asked for a run, as the script will see it.
+type Caller struct {
+	Kind string `json:"kind"` // admin | user | anon | system
+	Sub  string `json:"sub,omitempty"`
+	Org  string `json:"org,omitempty"`
+}
+
+// SystemCaller is what a scheduled or webhook-triggered run reports. It is
+// not "admin": nobody signed in, and a script that logs its caller should say
+// so rather than name a person who was asleep.
+func SystemCaller() Caller { return Caller{Kind: "system"} }
 
 // Run is one execution record.
 type Run struct {
@@ -92,11 +146,14 @@ func (r *Registry) Create(s Script) (Script, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreatedAt, s.UpdatedAt, s.Enabled = now, now, true
 
+	if err := ValidateRunAccess(s.RunAccess); err != nil {
+		return Script{}, err
+	}
 	net, _ := json.Marshal(s.AllowNet)
 	_, err := r.db.Exec(`
-		INSERT INTO scripts (name, code, description, timeout_ms, allow_net, enabled, created_at, updated_at)
-		VALUES (?,?,?,?,?,1,?,?)`,
-		s.Name, s.Code, s.Description, s.TimeoutMS, string(net), now, now)
+		INSERT INTO scripts (name, code, description, timeout_ms, allow_net, enabled, run_access, created_at, updated_at)
+		VALUES (?,?,?,?,?,1,?,?,?)`,
+		s.Name, s.Code, s.Description, s.TimeoutMS, string(net), s.RunAccess, now, now)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Script{}, ErrExists
@@ -113,10 +170,16 @@ func isUniqueViolation(err error) bool {
 
 // Update replaces the mutable fields of an existing script. Nil pointers leave
 // a field untouched, so a code edit does not silently reset a timeout.
-func (r *Registry) Update(name string, code, description *string, timeoutMS *int, allowNet *[]string, enabled *bool) (Script, error) {
+func (r *Registry) Update(name string, code, description *string, timeoutMS *int, allowNet *[]string, enabled *bool, runAccess *string) (Script, error) {
 	cur, err := r.Get(name)
 	if err != nil {
 		return Script{}, err
+	}
+	if runAccess != nil {
+		if err := ValidateRunAccess(*runAccess); err != nil {
+			return Script{}, err
+		}
+		cur.RunAccess = *runAccess
 	}
 	if code != nil {
 		cur.Code = *code
@@ -141,9 +204,9 @@ func (r *Registry) Update(name string, code, description *string, timeoutMS *int
 		en = 1
 	}
 	_, err = r.db.Exec(`
-		UPDATE scripts SET code=?, description=?, timeout_ms=?, allow_net=?, enabled=?, updated_at=?
+		UPDATE scripts SET code=?, description=?, timeout_ms=?, allow_net=?, enabled=?, run_access=?, updated_at=?
 		WHERE name=?`,
-		cur.Code, cur.Description, cur.TimeoutMS, string(net), en, cur.UpdatedAt, name)
+		cur.Code, cur.Description, cur.TimeoutMS, string(net), en, cur.RunAccess, cur.UpdatedAt, name)
 	if err != nil {
 		return Script{}, err
 	}
@@ -156,9 +219,9 @@ func (r *Registry) Get(name string) (Script, error) {
 	var net string
 	var enabled int
 	err := r.db.QueryRow(`
-		SELECT name, code, description, timeout_ms, allow_net, enabled, created_at, updated_at
+		SELECT name, code, description, timeout_ms, allow_net, enabled, run_access, created_at, updated_at
 		FROM scripts WHERE name = ?`, name).
-		Scan(&s.Name, &s.Code, &s.Description, &s.TimeoutMS, &net, &enabled, &s.CreatedAt, &s.UpdatedAt)
+		Scan(&s.Name, &s.Code, &s.Description, &s.TimeoutMS, &net, &enabled, &s.RunAccess, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return Script{}, ErrNotFound
 	}
@@ -174,7 +237,7 @@ func (r *Registry) Get(name string) (Script, error) {
 // List returns every script without its code, which is usually large.
 func (r *Registry) List() ([]Script, error) {
 	rows, err := r.db.Query(`
-		SELECT name, description, timeout_ms, allow_net, enabled, created_at, updated_at
+		SELECT name, description, timeout_ms, allow_net, enabled, run_access, created_at, updated_at
 		FROM scripts ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -186,7 +249,7 @@ func (r *Registry) List() ([]Script, error) {
 		var s Script
 		var net string
 		var enabled int
-		if err := rows.Scan(&s.Name, &s.Description, &s.TimeoutMS, &net, &enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.Name, &s.Description, &s.TimeoutMS, &net, &enabled, &s.RunAccess, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		s.Enabled = enabled == 1

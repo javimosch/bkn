@@ -21,6 +21,12 @@ passes the 113 that existed when it was gated; the 51 added since — `access`
 and part of `cms`/`headless` — are contract it has not been held to yet, which
 is a statement about what has been ported, not about what passes.
 
+`t-scriptaccess.sh` is the exception: it starts its own bkn on a random port
+with its own database, because a script can only be created by the CLI on the
+machine that holds the data, and a production instance is not a place to leave
+a fixture script lying around. It needs only a built binary (`BKN_BIN`,
+default `bin/bkn`).
+
 `dog.sh` is the shared harness (auth helper, assertion helpers). Each suite
 prints `[N passed, M failed]`.
 
@@ -34,6 +40,7 @@ prints `[N passed, M failed]`.
 | `access` | collection policies, the five audiences, cross-tenant refusals, self-service |
 | `files` | namespaces, dedup, inline-vs-attachment, ETag, type allow-list |
 | `runtime` | events, cron (including the scheduler firing), locks, the sandbox surface |
+| `scriptaccess` | the per-script run policy: the audience matrix, the caller a script sees, and that an undeclared script stays admin-only |
 | `stripe` | signature verification, replay window, idempotent retries |
 | `forms` | validation, honeypot, dedupe, CSV export with RFC 4180 quoting |
 | `cms` | i18n, redirects, feature flags, JSON configs |

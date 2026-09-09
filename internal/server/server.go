@@ -231,7 +231,7 @@ func (s *Server) routes() http.Handler {
 	s.lifecycleRoutes(mux)
 
 	mux.HandleFunc("GET /v1/script", s.guard(s.scriptList))
-	mux.HandleFunc("POST /v1/script/{name}/run", s.guard(s.scriptRun))
+	mux.HandleFunc("POST /v1/script/{name}/run", s.scriptRun)
 	mux.HandleFunc("GET /v1/script/{name}/runs", s.guard(s.scriptRuns))
 
 	mux.HandleFunc("GET /v1/kv", s.kvList)
@@ -486,7 +486,37 @@ func (s *Server) scriptList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(scripts), "scripts": scripts})
 }
 
+// scriptRun executes a script for whoever the policy allows.
+//
+// Until this existed every script was admin-only, which meant a caller that
+// wanted one had to hold the operator credential -- so anything built on top
+// either ran as the operator or did not run. The policy is per script because
+// a script is a capability: its code was written and reviewed once, and
+// opening one says nothing about the rest.
 func (s *Server) scriptRun(w http.ResponseWriter, r *http.Request) {
+	c := s.caller(r)
+	sc, err := s.reg.Get(r.PathValue("name"))
+	if err != nil {
+		// A script nobody may run must not be distinguishable from a script
+		// that does not exist. Deciding against the default policy first
+		// means an anonymous caller cannot use 404s to enumerate what an
+		// operator has installed.
+		if d := access.Decide(store.Access{}, "run", c); !d.Allow {
+			s.deny(w, d)
+			return
+		}
+		if errors.Is(err, script.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	if d := access.Decide(runPolicy(sc), "run", c); !d.Allow {
+		s.deny(w, d)
+		return
+	}
+
 	var input any = map[string]any{}
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 4<<20)).Decode(&input); err != nil {
@@ -494,7 +524,9 @@ func (s *Server) scriptRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := s.runner.Run(r.PathValue("name"), input)
+	res, err := s.runner.RunAs(r.PathValue("name"), input, script.Caller{
+		Kind: c.Kind, Sub: c.Sub, Org: c.Org,
+	})
 	if errors.Is(err, script.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "not_found", err.Error())
 		return
@@ -514,6 +546,16 @@ func (s *Server) scriptRun(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusUnprocessableEntity
 	}
 	writeJSON(w, status, map[string]any{"ok": res.OK, "value": res.Value, "run": res.Run})
+}
+
+// runPolicy renders a script's declared audience as a store policy, so the
+// decision goes through the same Decide every other authorization in bkn
+// does. One matrix, one place to audit, one test.
+func runPolicy(sc script.Script) store.Access {
+	if sc.RunAccess == "" {
+		return store.Access{}
+	}
+	return store.Access{Rules: map[string]string{"run": sc.RunAccess}}
 }
 
 func (s *Server) scriptRuns(w http.ResponseWriter, r *http.Request) {

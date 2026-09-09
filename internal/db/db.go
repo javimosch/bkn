@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS scripts (
   timeout_ms  INTEGER NOT NULL DEFAULT 5000,
   allow_net   TEXT NOT NULL DEFAULT '[]',
   enabled     INTEGER NOT NULL DEFAULT 1,
+  run_access  TEXT NOT NULL DEFAULT '',
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
@@ -236,6 +237,7 @@ var addedColumns = []string{
 	`ALTER TABLE collections ADD COLUMN retain_last INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE collections ADD COLUMN retain_per TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE collections ADD COLUMN access TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE scripts ADD COLUMN run_access TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE file_namespaces ADD COLUMN verify_type INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE file_namespaces ADD COLUMN signing_key TEXT NOT NULL DEFAULT ''`,
 }

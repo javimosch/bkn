@@ -48,6 +48,16 @@ type Result struct {
 // use, and a fresh one also means one script cannot leave state behind for the
 // next.
 func (r *Runner) Run(name string, input any) (Result, error) {
+	return r.RunAs(name, input, SystemCaller())
+}
+
+// RunAs executes a stored script on behalf of a caller.
+//
+// The caller reaches the script as bkn.caller. That is the half of this
+// mechanism that makes a user-runnable script useful rather than merely
+// permitted: the policy decides whether you may run it, and the script itself
+// decides what you may see, which it cannot do without knowing who you are.
+func (r *Runner) RunAs(name string, input any, c Caller) (Result, error) {
 	s, err := r.reg.Get(name)
 	if err != nil {
 		return Result{}, err
@@ -55,12 +65,17 @@ func (r *Runner) Run(name string, input any) (Result, error) {
 	if !s.Enabled {
 		return Result{}, ErrDisabled
 	}
-	return r.Exec(s, input)
+	return r.ExecAs(s, input, c)
 }
 
 // Exec runs a script definition that need not be stored, which is what makes
 // `script test` possible before anything is saved.
 func (r *Runner) Exec(s Script, input any) (Result, error) {
+	return r.ExecAs(s, input, SystemCaller())
+}
+
+// ExecAs runs a definition that need not be stored, as a given caller.
+func (r *Runner) ExecAs(s Script, input any, c Caller) (Result, error) {
 	started := time.Now()
 	run := Run{
 		ID:        store.NewID(),
@@ -80,6 +95,10 @@ func (r *Runner) Exec(s Script, input any) (Result, error) {
 
 	var logs strings.Builder
 	host := r.newHost(vm, s, &logs)
+	// Read-only from the script's side: it is a fact about the request, not a
+	// setting. A script that could rewrite its own caller could launder a
+	// public request into an admin one.
+	host["caller"] = map[string]any{"kind": c.Kind, "sub": c.Sub, "org": c.Org}
 	if err := vm.Set("bkn", host); err != nil {
 		return Result{}, err
 	}

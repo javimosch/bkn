@@ -26,6 +26,9 @@ func failScript(err error) {
 		out.Fail(out.Conflict, "already_exists", err.Error(), "bkn script update <name> --file <path>")
 	case errors.Is(err, script.ErrBadName):
 		out.Fail(out.InvalidValue, "invalid_name", err.Error())
+	case errors.Is(err, script.ErrBadAccess):
+		out.Fail(out.InvalidValue, "invalid_access", err.Error(),
+			"bkn script update <name> --run-access user")
 	case errors.Is(err, script.ErrDisabled):
 		out.Fail(out.NotAuthenticated, "script_disabled", err.Error(),
 			"bkn script update <name> --enable")
@@ -85,6 +88,7 @@ func cmdScript(args []string) {
 		desc := fs.String("description", "", "what this script does")
 		timeout := fs.Int("timeout", script.DefaultTimeoutMS, "run budget in milliseconds")
 		allowNet := fs.String("allow-net", "", "comma-separated hosts the script may reach (\"*.example.com\" allowed)")
+		runAccess := fs.String("run-access", "", "who may run it over HTTP: admin (default)|user|org|public")
 		pos := parseFlags(fs, rest)
 		need(pos, 1, "bkn script create <name> --file <path>")
 		if *file == "" {
@@ -97,6 +101,7 @@ func cmdScript(args []string) {
 			Description: *desc,
 			TimeoutMS:   *timeout,
 			AllowNet:    splitList(*allowNet),
+			RunAccess:   *runAccess,
 		})
 		if err != nil {
 			failScript(err)
@@ -127,15 +132,16 @@ func cmdScript(args []string) {
 		allowNet := fs.String("allow-net", "", "replace the allowed hosts")
 		enable := fs.Bool("enable", false, "enable the script")
 		disable := fs.Bool("disable", false, "disable the script")
+		runAccess := fs.String("run-access", "", "who may run it over HTTP: admin|user|org|public")
 		pos := parseFlags(fs, rest)
-		need(pos, 1, "bkn script update <name> [--file <path>] [--allow-net hosts] [--enable|--disable]")
+		need(pos, 1, "bkn script update <name> [--file <path>] [--allow-net hosts] [--run-access who] [--enable|--disable]")
 		if *enable && *disable {
 			out.Fail(out.InvalidArguments, "conflicting_flags", "--enable and --disable are mutually exclusive")
 		}
 
 		// Only flags the caller actually passed are applied, so editing the
 		// code cannot silently reset a timeout or an allowlist.
-		var code, description, netList *string
+		var code, description, netList, accessPtr *string
 		var timeoutPtr *int
 		var enabled *bool
 		var allowed []string
@@ -157,13 +163,15 @@ func cmdScript(args []string) {
 			case "disable":
 				f := false
 				enabled = &f
+			case "run-access":
+				accessPtr = runAccess
 			}
 		})
 		var allowPtr *[]string
 		if netList != nil {
 			allowPtr = &allowed
 		}
-		s, err := reg.Update(pos[0], code, description, timeoutPtr, allowPtr, enabled)
+		s, err := reg.Update(pos[0], code, description, timeoutPtr, allowPtr, enabled, accessPtr)
 		if err != nil {
 			failScript(err)
 		}

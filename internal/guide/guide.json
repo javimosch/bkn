@@ -60,7 +60,9 @@
     "access policy": "What a collection allows a non-admin caller to do, declared on the collection: a verb (read, create, update, delete) mapped to an audience (admin, user, owner, org, public). Undeclared means admin-only, so a collection nobody has spoken about behaves exactly as it always did. 'owner' and 'org' also scope: they need --owner-field or --org-field naming the document field that holds the user or org id, and bkn applies that as part of every read and write rather than as a check beside it.",
     "scope stamping": "On a scoped create, bkn writes the caller's own user or org id into the scope field, overwriting whatever the body said. A document cannot be created into somebody else's tenant, because the tenant is not something the client gets to state.",
     "normalizers": "A collection declares field normalization (lower, upper, trim, trim_lower). The store applies it on every write AND to every filter value for the same field, so a lookup finds the row a normalized write created. A field may name a nested key with dots, e.g. declarant.email. A path the store cannot address (array indices, quoting, wildcards) is rejected when declared rather than silently ignored.",
-    "verify-type": "A namespace flag that makes bkn decide a file's type from its bytes instead of from what the uploader declared, refusing an upload whose declared type disagrees. Off by default. Without it the allow-list is checked against a string the caller sent, which is fine while only the admin token can write and not fine once a tenant can. It sniffs bytes, not intentions: a .docx IS a zip and sniffs as application/zip, so a namespace using this allow-lists what files look like rather than what they are called."
+    "verify-type": "A namespace flag that makes bkn decide a file's type from its bytes instead of from what the uploader declared, refusing an upload whose declared type disagrees. Off by default. Without it the allow-list is checked against a string the caller sent, which is fine while only the admin token can write and not fine once a tenant can. It sniffs bytes, not intentions: a .docx IS a zip and sniffs as application/zip, so a namespace using this allow-lists what files look like rather than what they are called.",
+    "who may run a script": "Every script is admin-only unless it declares otherwise. --run-access user lets any signed-in caller run it, org any caller whose token is scoped to an organization, public anyone at all. The policy is per script because a script is a capability: its code was written and reviewed once, and opening one says nothing about the rest. \"owner\" is refused -- a script has no owner field to scope by, so it would silently mean \"any signed-in user\".",
+    "a script knows its caller": "bkn.caller is {kind, sub, org}: admin, user, anon, or system for a scheduled or webhook run. The policy decides whether you may run a script; the script decides what you may see, which it cannot do without knowing who called."
   },
   "commands": {
     "store": [
@@ -101,7 +103,8 @@
       "bkn script show <name>",
       "bkn script update <name> [--file <path>] [--description <text>] [--timeout <ms>] [--allow-net <hosts>] [--enable|--disable]",
       "bkn script delete <name>",
-      "bkn script runs <name> [--limit <n>]"
+      "bkn script runs <name> [--limit <n>]",
+      "bkn script update digest --run-access user - let signed-in callers run it over HTTP"
     ],
     "auth": [
       "bkn auth user create <email> --password-stdin [--name <n>] [--role user|admin]",
@@ -427,7 +430,9 @@
     "An 'org' audience refuses a token that carries no organization rather than treating it as unscoped. Sign in with --org, or call /v1/auth/switch-org.",
     "Cross-origin browser calls need BKN_CORS_ORIGIN set to an explicit allow-list. It is unset by default, which means no browser on another origin can call the API at all.",
     "Self-service registration is off unless BKN_OPEN_SIGNUP=1. An open registration endpoint is a property of the deployment, not of whoever last held a token.",
-    "files put refuses an existing name with 409 already_exists unless --overwrite. The claim and the write are one statement, so two uploads racing for the same new name give one success and one already_exists rather than one silently replacing the other."
+    "files put refuses an existing name with 409 already_exists unless --overwrite. The claim and the write are one statement, so two uploads racing for the same new name give one success and one already_exists rather than one silently replacing the other.",
+    "Opening a script to users hands them everything that script can do, not everything it was given: the sandbox still holds the full store and kv, so scope inside the script with bkn.caller.sub.",
+    "An anonymous caller gets 401 on a user-only script and 403 on an admin-only one: the first says a token would help, the second says none ever will. A script nobody may run answers exactly like a script that does not exist, so 404s cannot enumerate what is installed."
   ],
   "see_also": [
     "bkn help-json",

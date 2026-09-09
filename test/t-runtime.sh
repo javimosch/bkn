@@ -14,6 +14,6 @@ chk "scheduler fired it" "$(a "$B/v1/events/cron?type=cron.ok&subject=dogtick" |
 chk "script listed"      "$(a "$B/v1/script" | python3 -c 'import json,sys;print(any(s["name"]=="dogjob" for s in json.load(sys.stdin)["scripts"]))')" "True"
 chk "script run + value" "$(aj -X POST "$B/v1/script/dogjob/run" -d '{}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["value"]["hmac12"])')" "$(python3 -c "
 import hmac,hashlib;print(hmac.new(b'k',b'm',hashlib.sha256).hexdigest()[:12])")"
-chk "sandbox surface"    "$(aj -X POST "$B/v1/script/dogjob/run" -d '{}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["value"]["has"])')" "auth,crypto,events,files,http,id,kv,lock,log,now,store"
+chk "sandbox surface"    "$(aj -X POST "$B/v1/script/dogjob/run" -d '{}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["value"]["has"])')" "auth,caller,crypto,events,files,http,id,kv,lock,log,now,store"
 chk "run history"        "$(a "$B/v1/script/dogjob/runs?limit=3" | python3 -c 'import json,sys;print(json.load(sys.stdin)["count"]>=1)')" "True"
 echo "   [$PASS passed, $FAIL failed]"

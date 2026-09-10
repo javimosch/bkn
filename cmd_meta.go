@@ -132,6 +132,7 @@ func helpJSON() map[string]any {
 			"hooks update":       c([]string{"name"}, []string{"--script <s>", "--max-bytes <n>", "--allow-origin <origin>", "--rate-limit <n>", "--enable", "--disable"}),
 			"hooks delete":       c([]string{"name"}, none),
 			"hooks test":         c([]string{"name"}, []string{"--body <raw|@file|->", "--header <name=value>", "--method <m>"}),
+			"backup":             c(none, []string{"--to <path>", "--stdout"}),
 			"lock list":          c(none, none),
 			"lock acquire":       c([]string{"key"}, []string{"--ttl <duration>"}),
 			"lock release":       c([]string{"key", "owner"}, []string{"--force"}),

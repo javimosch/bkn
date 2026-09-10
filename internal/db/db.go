@@ -252,3 +252,57 @@ func addColumns(conn *sql.DB) error {
 	}
 	return nil
 }
+
+// Snapshot writes a consistent copy of the datastore to dest using
+// VACUUM INTO, which is safe to run while `serve` holds the same file open.
+//
+// The alternative that keeps getting reached for -- the C `sqlite3` CLI's
+// .backup -- is not safe here. Opened read-only it cannot use the -shm of a
+// hot WAL, so it can silently produce a database missing every recent commit:
+// a backup that restores cleanly and has lost a day. Going through the same
+// modernc driver the server uses means the snapshot sees the WAL.
+//
+// It deliberately does NOT migrate. A CLI newer than the running server would
+// otherwise alter the schema under it, and a backup is the last place that
+// should have a side effect.
+func Snapshot(dest string) error {
+	if dest == "" {
+		return fmt.Errorf("no destination given")
+	}
+	if _, err := os.Stat(dest); err == nil {
+		// VACUUM INTO refuses to overwrite, and its own error is opaque.
+		return fmt.Errorf("%s already exists", dest)
+	}
+	p := Path()
+	if _, err := os.Stat(p); err != nil {
+		return fmt.Errorf("open %s: %w", p, err)
+	}
+	dsn := p + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(15000)"
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.Ping(); err != nil {
+		return fmt.Errorf("open %s: %w", p, err)
+	}
+	if _, err := conn.Exec("VACUUM INTO ?", dest); err != nil {
+		return fmt.Errorf("snapshot to %s: %w", dest, err)
+	}
+	return nil
+}
+
+// Verify runs an integrity check against a database file, used to prove a
+// snapshot is readable before anything relies on it.
+func Verify(path string) (string, error) {
+	conn, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	var result string
+	if err := conn.QueryRow("PRAGMA integrity_check").Scan(&result); err != nil {
+		return "", fmt.Errorf("integrity check %s: %w", path, err)
+	}
+	return result, nil
+}

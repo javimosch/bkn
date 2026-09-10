@@ -96,15 +96,14 @@
       "bkn version"
     ],
     "script": [
-      "bkn script create <name> --file <path> [--description <text>] [--timeout <ms>] [--allow-net <hosts>]",
+      "bkn script create <name> --file <path> [--description <text>] [--timeout <ms>] [--allow-net <hosts>] [--run-access admin|user|org|public]",
       "bkn script test --file <path> [--input <json>] [--timeout <ms>] [--allow-net <hosts>]",
       "bkn script run <name> [--input <json|@file|->]",
       "bkn script list",
       "bkn script show <name>",
-      "bkn script update <name> [--file <path>] [--description <text>] [--timeout <ms>] [--allow-net <hosts>] [--enable|--disable]",
+      "bkn script update <name> [--file <path>] [--description <text>] [--timeout <ms>] [--allow-net <hosts>] [--run-access admin|user|org|public] [--enable|--disable]",
       "bkn script delete <name>",
-      "bkn script runs <name> [--limit <n>]",
-      "bkn script update digest --run-access user - let signed-in callers run it over HTTP"
+      "bkn script runs <name> [--limit <n>]"
     ],
     "auth": [
       "bkn auth user create <email> --password-stdin [--name <n>] [--role user|admin]",
@@ -175,6 +174,10 @@
       "bkn uninstall [--prefix <dir>]",
       "bkn feedback <message> [--kind bug|idea|praise|note] [--context <text>] [--reporter <who>]",
       "bkn telemetry [--on] [--off]"
+    ],
+    "backup": [
+      "bkn backup --to <path>",
+      "bkn backup --stdout"
     ]
   },
   "examples": [

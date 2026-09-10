@@ -82,6 +82,8 @@ func main() {
 		cmdFeedback(rest)
 	case "telemetry":
 		cmdTelemetry(rest)
+	case "backup":
+		cmdBackup(rest)
 	case "lock":
 		cmdLock(rest)
 	case "serve":

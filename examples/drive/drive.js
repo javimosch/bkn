@@ -476,7 +476,23 @@ function binnedUnder(drive, id) {
   });
 }
 
+// linksTo finds the share links pointing at an entry. They are keyed by the
+// hash of their token, so there is no way to reach them from the entry side
+// except by looking.
+function linksTo(entryId) {
+  return bkn.store.list(LINKS, { where: { entry: entryId }, limit: 100 });
+}
+
 function purgeEntry(drive, entry) {
+  // A link to a destroyed file is a URL that can only ever answer "no longer
+  // available". Left behind it would also keep the file's name and path
+  // readable in the owner's link list long after the file itself is gone.
+  //
+  // Only on PURGE, never on bin: a binned file can come back, and its links
+  // must work again when it does.
+  const links = linksTo(entry.id);
+  for (let i = 0; i < links.length; i++) bkn.store.delete(LINKS, links[i].id);
+
   if (entry.kind === "file") {
     if (entry.blob) {
       try { bkn.files.delete(BLOBS, entry.blob); } catch (e) { bkn.log("blob delete failed:", e); }

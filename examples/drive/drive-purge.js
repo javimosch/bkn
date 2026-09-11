@@ -12,10 +12,20 @@
 
 const ENTRIES = "drive/entries";
 const USAGE = "drive/usage";
+const LINKS = "drive/links";
 const BLOBS = "drive-blobs";
 
 const BIN_DAYS = 30;
 const BATCH = 200;
+
+// A share link outlives the file it points at unless something removes it.
+// The nightly purge is that something: it is the only place a file is
+// destroyed on its own, with nobody watching to tidy up afterwards.
+function dropLinks(entryId) {
+  const links = bkn.store.list(LINKS, { where: { entry: entryId }, limit: 100 });
+  for (let i = 0; i < links.length; i++) bkn.store.delete(LINKS, links[i].id);
+  return links.length;
+}
 
 function main(input) {
   const days = Number(input && input.days) > 0 ? Number(input.days) : BIN_DAYS;
@@ -38,6 +48,7 @@ function main(input) {
   const purged = [];
   let bytes = 0;
   let skipped = 0;
+  let linksDropped = 0;
 
   for (let i = 0; i < rows.length; i++) {
     const e = rows[i];
@@ -59,6 +70,7 @@ function main(input) {
     if (!dryRun) {
       for (let k = 0; k < riders.length; k++) {
         const r = riders[k];
+        linksDropped += dropLinks(r.id);
         if (r.kind === "file" && r.blob) {
           try { bkn.files.delete(BLOBS, r.blob); } catch (err) { bkn.log("blob delete failed:", err); }
         }
@@ -70,6 +82,7 @@ function main(input) {
         }
         bkn.store.delete(ENTRIES, r.id);
       }
+      linksDropped += dropLinks(e.id);
       if (e.kind === "file" && e.blob) {
         try { bkn.files.delete(BLOBS, e.blob); } catch (err) { bkn.log("blob delete failed:", err); }
       }
@@ -93,6 +106,7 @@ function main(input) {
     examined: rows.length,
     purged: purged.length,
     bytes_freed: bytes,
+    links_dropped: linksDropped,
     skipped_without_timestamp: skipped,
     more: rows.length === BATCH,
     entries: purged.slice(0, 25)

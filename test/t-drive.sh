@@ -294,6 +294,38 @@ echo "-- link permissions"
 chk "bob cannot make a link in alice's drive" "422" "$(code "$BOB" "{\"op\":\"link-create\",\"drive\":\"user:$ALICE_ID\",\"path\":\"/\"}")"
 chk "nor list her links"              "422"     "$(code "$BOB" "{\"op\":\"links\",\"drive\":\"user:$ALICE_ID\"}")"
 
+echo "-- links follow the file into the bin and out of it"
+op "$ALICE" '{"op":"empty-bin","drive":"user:me"}' >/dev/null
+upcode "$ALICE" user:me / "partage.txt" 'partage' >/dev/null
+STOK=$(op "$ALICE" '{"op":"link-create","drive":"user:me","path":"/partage.txt"}' | j value.token)
+chk "the link works"                  "partage.txt" "$(link "{\"token\":\"$STOK\"}" | j name)"
+
+# Binning must NOT destroy the link: the file can come back, and a link that
+# died with a recoverable deletion would have to be reissued to everyone.
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/partage.txt"}' >/dev/null
+chk "binned: the link reports gone"   "410"     "$(lcode "{\"token\":\"$STOK\"}")"
+chk "but the link still exists"       "1"       "$(op "$ALICE" '{"op":"links","drive":"user:me"}' | j value.count)"
+RID2=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
+op "$ALICE" "{\"op\":\"restore\",\"drive\":\"user:me\",\"id\":\"$RID2\"}" >/dev/null
+chk "restoring makes it work again"   "partage.txt" "$(link "{\"token\":\"$STOK\"}" | j name)"
+
+echo "-- purging a file takes its links with it"
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/partage.txt"}' >/dev/null
+PGID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
+op "$ALICE" "{\"op\":\"purge\",\"drive\":\"user:me\",\"id\":\"$PGID\"}" >/dev/null
+chk "the link record is gone"         "0"       "$(op "$ALICE" '{"op":"links","drive":"user:me"}' | j value.count)"
+chk "and the url is simply not valid" "404"     "$(lcode "{\"token\":\"$STOK\"}")"
+
+echo "-- the nightly purge drops links too"
+upcode "$ALICE" user:me / "vieux.txt" 'vieux' >/dev/null
+OTOK=$(op "$ALICE" '{"op":"link-create","drive":"user:me","path":"/vieux.txt"}' | j value.token)
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/vieux.txt"}' >/dev/null
+OID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
+patch_bin_date "$OID"
+chk "the cron reports the links it dropped" "1" "$("$BKN" script run drive-purge 2>/dev/null | j value.links_dropped)"
+chk "and that link is dead"           "404"     "$(lcode "{\"token\":\"$OTOK\"}")"
+chk "no link records survive"         "0"       "$(op "$ALICE" '{"op":"links","drive":"user:me"}' | j value.count)"
+
 echo "-- concurrent uploads race for the last bytes"
 # The quota is reserved with an atomic $inc before the blob is written, so a
 # check-then-write race cannot let two uploads jointly exceed the limit. Ten at

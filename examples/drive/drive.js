@@ -27,6 +27,14 @@ const MEMBERS = "drive/group_members";
 const SHARES = "drive/shares";
 const BLOBS = "drive-blobs";
 
+// How long a binned file waits before the nightly purge takes it.
+const BIN_DAYS = 30;
+
+// Entry state. bkn store filters are equality matches, so "not deleted" has to
+// be a value rather than the absence of one.
+const LIVE = "live";
+const BINNED = "binned";
+
 // Defaults matching superbackend's, so a migrated deployment behaves the same
 // until a policy says otherwise.
 const DEFAULT_MAX_UPLOAD = 1073741824; // 1 GiB
@@ -44,7 +52,7 @@ function caller() {
   const c = bkn.caller || {};
   // The admin token has no subject: it is an operator, not a person. Ops that
   // need a person say so when they resolve the drive.
-  if (c.kind !== "admin" && !c.sub) fail("this operation needs a signed-in caller");
+  if (!isAdmin(c) && !c.sub) fail("this operation needs a signed-in caller");
   return c;
 }
 
@@ -55,7 +63,11 @@ function caller() {
 // admin-role user. Org and group administration, which people really do need
 // to perform, goes through bkn.auth.can instead.
 function isAdmin(c) {
-  return c.kind === "admin";
+  // "system" is bkn's own scheduler running a cron. It is the server acting on
+  // its own behalf, which for this domain is the same authority as the admin
+  // token -- that is how the nightly purge gets to delete other people's
+  // binned files.
+  return c.kind === "admin" || c.kind === "system";
 }
 
 // Callers name people by email; bkn.caller identifies them by id. Storing the
@@ -306,7 +318,7 @@ function opMkdir(input, c) {
     const rec = bkn.store.put(ENTRIES, {
       drive: drive.key, drive_type: drive.type, drive_id: drive.id,
       parent_path: parent, name: name, kind: "folder",
-      owner: c.sub, visibility: "private", deleted: "",
+      owner: c.sub, visibility: "private", state: LIVE, deleted: "",
       path_key: key, created_at: bkn.now(), updated_at: bkn.now()
     }, id);
     return { created: true, entry: { id: rec.id, name: name, kind: "folder", path: joinPath(parent, name) } };
@@ -333,7 +345,7 @@ function opStat(input, c) {
   const path = normalizePath(input.path);
   if (path === "/") return { entry: { name: "/", kind: "folder", path: "/" } };
   const entry = entryAt(drive, parentOf(path), baseOf(path));
-  if (!entry || entry.deleted) fail(path + " does not exist");
+  if (!entry || entry.state === BINNED) fail(path + " does not exist");
   return { entry: entry };
 }
 
@@ -344,27 +356,122 @@ function opRm(input, c) {
   if (path === "/") fail("the drive root cannot be removed", "path");
   const parent = parentOf(path), name = baseOf(path);
   const entry = entryAt(drive, parent, name);
-  if (!entry || entry.deleted) fail(path + " does not exist");
+  if (!entry || entry.state === BINNED) fail(path + " does not exist");
 
   if (entry.kind === "folder") {
     const kids = bkn.store.list(ENTRIES, {
-      where: { drive: drive.key, parent_path: path, deleted: "" }, limit: 1
+      where: { drive: drive.key, parent_path: path, state: LIVE }, limit: 1
     });
     if (kids.length > 0) fail(path + " is not empty");
   }
 
-  // The path claim goes first: it is what makes the name reusable, and a
-  // caller who deleted something expects to be able to re-create it even if
-  // the blob cleanup below were to fail.
+  // Into the bin, not gone. The path claim IS released, so the name can be
+  // used again immediately -- a bin that blocks the name it holds would make
+  // "delete and re-upload" fail for thirty days.
   releasePath(entry.path_key);
-  bkn.store.patch(ENTRIES, entry.id, { deleted: bkn.now(), updated_at: bkn.now() });
+  bkn.store.patch(ENTRIES, entry.id, {
+    state: BINNED, deleted: bkn.now(), deleted_from: parent,
+    path_key: "", updated_at: bkn.now()
+  });
+
+  // Quota is NOT released. The bytes are still on the disk, and a bin that
+  // gave the space back would let a drive hold twice its quota for a month.
   if (entry.kind === "file") {
-    release(drive, Number(entry.size) || 0);
+    bkn.store.patch(USAGE, drive.key, { binned_bytes: { $inc: Number(entry.size) || 0 } });
+  }
+  return { binned: path, id: entry.id, purges_after_days: BIN_DAYS };
+}
+
+// --- the bin ---------------------------------------------------------------
+
+function binnedOf(drive, limit) {
+  return bkn.store.list(ENTRIES, {
+    where: { drive: drive.key, state: BINNED },
+    order_by: "deleted", order: "desc",
+    limit: limit || 200
+  });
+}
+
+function opBin(input, c) {
+  const drive = parseDrive(input.drive, c);
+  requireAccess(drive, c, "read");
+  const rows = binnedOf(drive, Number(input.limit) > 0 ? Number(input.limit) : 200);
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    out.push({
+      id: r.id, name: r.name, kind: r.kind, size: r.size || 0,
+      content_type: r.content_type || "", deleted: r.deleted,
+      original_path: joinPath(r.deleted_from || "/", r.name),
+      owner: r.owner
+    });
+  }
+  return { drive: drive.key, count: out.length, purges_after_days: BIN_DAYS, entries: out };
+}
+
+// purgeEntry is the only place that actually destroys anything. Blob first,
+// then the record: a record without its blob is a broken row in a listing,
+// while a blob without its record is invisible and merely wastes space, and of
+// the two the second is the one you can clean up later.
+function purgeEntry(drive, entry) {
+  if (entry.kind === "file") {
     if (entry.blob) {
       try { bkn.files.delete(BLOBS, entry.blob); } catch (e) { bkn.log("blob delete failed:", e); }
     }
+    const size = Number(entry.size) || 0;
+    bkn.store.patch(USAGE, drive.key, {
+      used_bytes: { $inc: -size }, files: { $inc: -1 }, binned_bytes: { $inc: -size }
+    });
   }
-  return { removed: path, id: entry.id };
+  bkn.store.delete(ENTRIES, entry.id);
+}
+
+function opPurge(input, c) {
+  const drive = parseDrive(input.drive, c);
+  requireAccess(drive, c, "write");
+  const id = String(input.id || "");
+  if (!id) fail("id is required; take it from the bin listing", "id");
+  const entry = bkn.store.get(ENTRIES, id);
+  if (!entry || entry.drive !== drive.key) fail("no such entry in " + drive.key, "id");
+  if (entry.state !== BINNED) fail("that entry is not in the bin; remove it first", "id");
+  purgeEntry(drive, entry);
+  return { purged: entry.name, id: id };
+}
+
+function opEmptyBin(input, c) {
+  const drive = parseDrive(input.drive, c);
+  requireAccess(drive, c, "write");
+  const rows = binnedOf(drive, 500);
+  for (let i = 0; i < rows.length; i++) purgeEntry(drive, rows[i]);
+  return { drive: drive.key, purged: rows.length, more: rows.length === 500 };
+}
+
+function opRestore(input, c) {
+  const drive = parseDrive(input.drive, c);
+  requireAccess(drive, c, "write");
+  const id = String(input.id || "");
+  if (!id) fail("id is required; take it from the bin listing", "id");
+  const entry = bkn.store.get(ENTRIES, id);
+  if (!entry || entry.drive !== drive.key) fail("no such entry in " + drive.key, "id");
+  if (entry.state !== BINNED) fail("that entry is not in the bin", "id");
+
+  const parent = normalizePath(input.to_path || entry.deleted_from || "/");
+  const name = checkName(input.to_name || entry.name);
+
+  // The folder it came from may be gone, and the name may have been reused
+  // while it sat in the bin. Both are ordinary, so say which one happened.
+  if (parent !== "/" && !entryAt(drive, parentOf(parent), baseOf(parent))) {
+    fail("the folder " + parent + " no longer exists; restore somewhere else with to_path", "to_path");
+  }
+  const key = claimPath(drive, parent, name, entry.id);
+  bkn.store.patch(ENTRIES, entry.id, {
+    state: LIVE, deleted: "", parent_path: parent, name: name,
+    path_key: key, updated_at: bkn.now()
+  });
+  if (entry.kind === "file") {
+    bkn.store.patch(USAGE, drive.key, { binned_bytes: { $inc: -(Number(entry.size) || 0) } });
+  }
+  return { restored: joinPath(parent, name), id: entry.id };
 }
 
 function opMv(input, c) {
@@ -376,7 +483,7 @@ function opMv(input, c) {
   if (from === "/") fail("the drive root cannot be moved", "path");
 
   const entry = entryAt(drive, parentOf(from), baseOf(from));
-  if (!entry || entry.deleted) fail(from + " does not exist");
+  if (!entry || entry.state === BINNED) fail(from + " does not exist");
   if (entry.kind === "folder" && (toParent === from || toParent.indexOf(from + "/") === 0)) {
     fail("a folder cannot be moved inside itself", "to_path");
   }
@@ -393,7 +500,7 @@ function opDownload(input, c) {
   const drive = parseDrive(input.drive, c);
   const path = normalizePath(input.path);
   const entry = entryAt(drive, parentOf(path), baseOf(path));
-  if (!entry || entry.deleted) fail(path + " does not exist");
+  if (!entry || entry.state === BINNED) fail(path + " does not exist");
   if (entry.kind !== "file") fail(path + " is a folder");
 
   // A share grants access to one entry without granting the drive, which is
@@ -418,6 +525,10 @@ function opQuota(input, c) {
     usage: {
       used_bytes: Number(usage.used_bytes) || 0,
       files: Number(usage.files) || 0,
+      // Binned files still occupy their bytes, so the number is reported
+      // rather than hidden: "delete things to free space" is misleading advice
+      // if the space comes back in thirty days.
+      binned_bytes: Number(usage.binned_bytes) || 0,
       free_bytes: Math.max(0, limits.max_storage_bytes - (Number(usage.used_bytes) || 0))
     }
   };
@@ -428,7 +539,7 @@ function opShare(input, c) {
   requireAccess(drive, c, "write");
   const path = normalizePath(input.path);
   const entry = entryAt(drive, parentOf(path), baseOf(path));
-  if (!entry || entry.deleted) fail(path + " does not exist");
+  if (!entry || entry.state === BINNED) fail(path + " does not exist");
   const withUser = resolveUser(input.user, "user");
   const level = input.access === "write" ? "write" : "read";
   bkn.store.put(SHARES, {
@@ -535,6 +646,7 @@ function opPolicyGet(input, c) {
 
 const OPS = {
   ls: opLs, mkdir: opMkdir, stat: opStat, rm: opRm, mv: opMv,
+  bin: opBin, restore: opRestore, purge: opPurge, "empty-bin": opEmptyBin,
   download: opDownload, quota: opQuota,
   share: opShare, unshare: opUnshare, shares: opShares,
   "group-create": opGroupCreate, "group-add": opGroupAdd,

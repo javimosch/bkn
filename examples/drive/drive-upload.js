@@ -232,7 +232,10 @@ function main(d) {
     parent_path: parent, name: name, kind: "file",
     blob: blob, size: size, content_type: String(body.content_type || ""),
     owner: c.sub, visibility: body.visibility === "public" ? "public" : "private",
-    deleted: "", path_key: key,
+    // state must match what drive.js queries on: bkn store filters are
+    // equality matches, so an entry without this field is invisible to every
+    // listing, to the folder-is-empty check, and to the bin.
+    state: "live", deleted: "", path_key: key,
     created_at: bkn.now(), updated_at: bkn.now()
   }, id);
 

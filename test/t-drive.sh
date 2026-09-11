@@ -46,6 +46,7 @@ setup "$BKN" auth member add acme bob@drive.test --role member
 setup "$BKN" files ns create drive-blobs --signing-key auto
 setup "$BKN" script create drive --file "$EX/drive.js" --run-access user
 setup "$BKN" script create drive-upload --file "$EX/drive-upload.js"
+setup "$BKN" script create drive-purge --file "$EX/drive-purge.js"
 setup "$BKN" hooks create drive-upload --script drive-upload --max-bytes 26214400
 
 "$BKN" serve --host 127.0.0.1 --port "$PORT" >"$WORK/srv.log" 2>&1 &
@@ -124,11 +125,12 @@ chk "an oversized single file is refused" "413"     "$(upcode "$ALICE" user:me /
 chk "a file within it is accepted"        "201"     "$(upcode "$ALICE" user:me / tiny.txt 'abc')"
 chk "a non-admin cannot set policy"       "422"     "$(code "$ALICE" '{"op":"policy-set","target":"global","max_storage_bytes":1}')"
 
-echo "-- deletion returns the bytes"
-chk "rm removes the file"                 "/reports/q3.txt" "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/reports/q3.txt"}' | j value.removed)"
-chk "usage drops by its size"             "3"       "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)"
-chk "the name is reusable afterwards"     "201"     "$(upcode "$ALICE" user:me /reports q3.txt 'ab')"
-chkin "a non-empty folder is protected"   "not empty" "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/reports"}')"
+echo "-- deleting is now binning"
+chk "rm bins the file"                "/reports/q3.txt" "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/reports/q3.txt"}' | j value.binned)"
+# It does NOT drop: the bytes are still on disk until the bin is purged.
+chk "usage does not drop"             "14"      "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)"
+chk "the name is reusable at once"    "201"     "$(upcode "$ALICE" user:me /reports q3.txt 'ab')"
+chkin "a non-empty folder is protected" "not empty" "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/reports"}')"
 
 echo "-- moving"
 chk "mv renames within a drive"           "/reports/q4.txt" "$(op "$ALICE" '{"op":"mv","drive":"user:me","path":"/reports/q3.txt","to_name":"q4.txt"}' | j value.to)"
@@ -154,6 +156,55 @@ chk "an org admin writes to the org drive" "201"    "$(upcode "$ALICE" org:acme 
 chk "an org member can read it"           "shared.txt" "$(op "$BOB" '{"op":"ls","drive":"org:acme"}' | j value.entries.0.name)"
 chk "but a plain member cannot write"     "403"     "$(upcode "$BOB" org:acme / member.txt 'nope')"
 chk "group quota falls back to the org"   "org"     "$(adminop '{"op":"policy-set","target":"org:acme","max_storage_bytes":50000}' >/dev/null; op "$ALICE" "{\"op\":\"quota\",\"drive\":\"group:$GID\"}" | j value.limits.source.max_storage)"
+
+echo "-- the bin, end to end"
+# Its own quota, so it does not inherit the 5-byte per-upload cap the quota
+# section leaves behind.
+adminop "{\"op\":\"policy-set\",\"target\":\"user:$ALICE_ID\",\"max_storage_bytes\":100000,\"max_upload_bytes\":100000}" >/dev/null
+# Start from an empty bin so the counts below are absolute rather than
+# relative to whatever earlier sections left lying around.
+op "$ALICE" '{"op":"empty-bin","drive":"user:me"}' >/dev/null
+op "$ALICE" '{"op":"mkdir","drive":"user:me","path":"/","name":"bintest"}' >/dev/null
+upcode "$ALICE" user:me /bintest doc.txt 'eleven byte' >/dev/null
+BIN_USED=$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)
+chk "rm puts a file in the bin"       "/bintest/doc.txt" "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/bintest/doc.txt"}' | j value.binned)"
+chk "it is gone from the folder"      "0"       "$(op "$ALICE" '{"op":"ls","drive":"user:me","path":"/bintest"}' | j value.count)"
+chk "and it is in the bin"            "doc.txt" "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.name)"
+chk "the bin remembers where it was"  "/bintest/doc.txt" "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.original_path)"
+# A bin that gave the space back would let a drive hold twice its quota for a month.
+chk "binned bytes still count as used" "$BIN_USED" "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)"
+chk "and are reported separately"     "11"      "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.binned_bytes)"
+# The name must be reusable at once: a bin that holds the name hostage would
+# break "delete it and upload the corrected version".
+chk "the name is free immediately"    "201"     "$(upcode "$ALICE" user:me /bintest doc.txt 'replacement')"
+BINID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
+chkin "restoring onto a taken name is refused" "already exists" "$(op "$ALICE" "{\"op\":\"restore\",\"drive\":\"user:me\",\"id\":\"$BINID\"}")"
+chk "restoring elsewhere works"       "/q3-old.txt" "$(op "$ALICE" "{\"op\":\"restore\",\"drive\":\"user:me\",\"id\":\"$BINID\",\"to_path\":\"/\",\"to_name\":\"q3-old.txt\"}" | j value.restored)"
+chk "the bin is empty again"          "0"       "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.count)"
+chk "restoring cleared binned bytes"  "0"       "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.binned_bytes)"
+chk "a restored file still downloads" "200"     "$(curl -s -o /dev/null -w '%{http_code}' -L "$B$(op "$ALICE" '{"op":"download","drive":"user:me","path":"/q3-old.txt"}' | j value.url)")"
+
+echo "-- purging"
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/q3-old.txt"}' >/dev/null
+PID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
+USED_BEFORE=$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)
+chk "purge removes it for good"       "q3-old.txt" "$(op "$ALICE" "{\"op\":\"purge\",\"drive\":\"user:me\",\"id\":\"$PID\"}" | j value.purged)"
+chk "and returns the bytes"           "$((USED_BEFORE - 11))" "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)"
+chkin "purging a live file is refused" "not in the bin" "$(op "$ALICE" "{\"op\":\"purge\",\"drive\":\"user:me\",\"id\":\"$(op "$ALICE" '{"op":"stat","drive":"user:me","path":"/bintest/doc.txt"}' | j value.entry.id)\"}")"
+
+echo "-- the nightly purge"
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/bintest/doc.txt"}' >/dev/null
+chk "a fresh bin entry is left alone"  "0"      "$(adminop '{"op":"noop"}' >/dev/null; "$BKN" script run drive-purge 2>/dev/null | j value.purged)"
+chk "it was examined, not ignored"     "1"      "$("$BKN" script run drive-purge 2>/dev/null | j value.examined)"
+# Re-dating the entry is how a 30-day wait becomes testable in one second.
+patch_bin_date() { "$BKN" store patch drive/entries "$1" --data "{\"deleted\":\"2020-01-01T00:00:00Z\"}" >/dev/null; }
+OLDID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
+patch_bin_date "$OLDID"
+chk "a dry run reports without deleting" "1"    "$("$BKN" script run drive-purge --input '{"dry_run":true}' 2>/dev/null | j value.purged)"
+chk "and really did not delete"        "1"      "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.count)"
+chk "the real run purges it"           "1"      "$("$BKN" script run drive-purge 2>/dev/null | j value.purged)"
+chk "the bin is empty"                 "0"      "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.count)"
+chk "a second run finds nothing"       "0"      "$("$BKN" script run drive-purge 2>/dev/null | j value.examined)"
 
 echo "-- concurrent uploads race for the last bytes"
 # The quota is reserved with an atomic $inc before the blob is written, so a

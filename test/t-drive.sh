@@ -47,6 +47,8 @@ setup "$BKN" files ns create drive-blobs --signing-key auto
 setup "$BKN" script create drive --file "$EX/drive.js" --run-access user
 setup "$BKN" script create drive-upload --file "$EX/drive-upload.js"
 setup "$BKN" script create drive-purge --file "$EX/drive-purge.js"
+setup "$BKN" script create drive-link --file "$EX/drive-link.js"
+setup "$BKN" hooks create drive-link --script drive-link --max-bytes 4096
 setup "$BKN" hooks create drive-upload --script drive-upload --max-bytes 26214400
 
 "$BKN" serve --host 127.0.0.1 --port "$PORT" >"$WORK/srv.log" 2>&1 &
@@ -248,6 +250,49 @@ AID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
 chk "purge removes the whole tree"            "4"       "$(op "$ALICE" "{\"op\":\"purge\",\"drive\":\"user:me\",\"id\":\"$AID\"}" | j value.items)"
 chk "and no orphans are left behind"          "0"       "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.count)"
 chk "the bytes came back"                     "0"       "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.binned_bytes)"
+
+echo "-- share links"
+op "$ALICE" '{"op":"empty-bin","drive":"user:me"}' >/dev/null
+upcode "$ALICE" user:me / "public-doc.txt" 'shared content' >/dev/null
+TOKEN=$(op "$ALICE" '{"op":"link-create","drive":"user:me","path":"/public-doc.txt"}' | j value.token)
+link() { curl -s -X POST "$B/v1/hooks/drive-link" -H 'Content-Type: application/json' -d "$1"; }
+# The record id is sha256(token)[:32] -- the token itself is never stored, so
+# this is the only way for the suite to revoke the exact link it created.
+link_id() { python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:32])" "$1"; }
+lcode() { curl -s -o /dev/null -w '%{http_code}' -X POST "$B/v1/hooks/drive-link" -H 'Content-Type: application/json' -d "$1"; }
+
+chk "a link is created"               "48"      "${#TOKEN}"
+chk "and resolves with no account"    "public-doc.txt" "$(link "{\"token\":\"$TOKEN\"}" | j name)"
+chkin "handing back a signed url"     "sig="    "$(link "{\"token\":\"$TOKEN\"}" | j url)"
+chk "the bytes actually download"     "200"     "$(curl -s -o /dev/null -w '%{http_code}' -L "$B$(link "{\"token\":\"$TOKEN\"}" | j url)")"
+chk "a wrong token is not found"      "404"     "$(lcode '{"token":"0000000000000000000000000000000000000000000000"}')"
+chk "and a short one too"             "404"     "$(lcode '{"token":"abc"}')"
+# The token is a capability, so it must not be recoverable from the drive.
+chk "the token is not stored"         "0"       "$("$BKN" store list drive/links --limit 5 2>/dev/null | grep -c "$TOKEN" || true)"
+chk "the listing shows the link"      "/public-doc.txt" "$(op "$ALICE" '{"op":"links","drive":"user:me"}' | j value.links.0.path)"
+chk "downloads are counted"           "3"       "$(op "$ALICE" '{"op":"links","drive":"user:me"}' | j value.links.0.downloads)"
+
+echo "-- password protected links"
+PTOKEN=$(op "$ALICE" '{"op":"link-create","drive":"user:me","path":"/public-doc.txt","password":"correct-horse"}' | j value.token)
+chk "a protected link asks for it"    "401"     "$(lcode "{\"token\":\"$PTOKEN\"}")"
+chk "and says so without leaking"     "true"    "$(link "{\"token\":\"$PTOKEN\"}" | j password_required)"
+chk "a wrong password is refused"     "401"     "$(lcode "{\"token\":\"$PTOKEN\",\"password\":\"nope\"}")"
+chk "the right one opens it"          "public-doc.txt" "$(link "{\"token\":\"$PTOKEN\",\"password\":\"correct-horse\"}" | j name)"
+chkin "a short password is refused at creation" "6 characters" "$(op "$ALICE" '{"op":"link-create","drive":"user:me","path":"/public-doc.txt","password":"abc"}')"
+
+echo "-- revoking and expiry"
+LID=$(link_id "$TOKEN")
+chk "a link can be revoked"           "/public-doc.txt" "$(op "$ALICE" "{\"op\":\"link-revoke\",\"drive\":\"user:me\",\"id\":\"$LID\"}" | j value.path)"
+chk "revoked links stop working"      "404"     "$(lcode "{\"token\":\"$TOKEN\"}")"
+# A link to a file that was deleted afterwards is the one failure the holder
+# cannot fix, so it must say so rather than look like a bad link.
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/public-doc.txt"}' >/dev/null
+chk "a link to a binned file is gone" "410"     "$(lcode "{\"token\":\"$PTOKEN\",\"password\":\"correct-horse\"}")"
+chkin "and explains why"              "no longer available" "$(link "{\"token\":\"$PTOKEN\",\"password\":\"correct-horse\"}")"
+
+echo "-- link permissions"
+chk "bob cannot make a link in alice's drive" "422" "$(code "$BOB" "{\"op\":\"link-create\",\"drive\":\"user:$ALICE_ID\",\"path\":\"/\"}")"
+chk "nor list her links"              "422"     "$(code "$BOB" "{\"op\":\"links\",\"drive\":\"user:$ALICE_ID\"}")"
 
 echo "-- concurrent uploads race for the last bytes"
 # The quota is reserved with an atomic $inc before the blob is written, so a

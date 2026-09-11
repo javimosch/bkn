@@ -25,6 +25,7 @@ const POLICY = "drive/policy";
 const GROUPS = "drive/groups";
 const MEMBERS = "drive/group_members";
 const SHARES = "drive/shares";
+const LINKS = "drive/links";
 const BLOBS = "drive-blobs";
 
 // How long a binned file waits before the nightly purge takes it.
@@ -680,6 +681,92 @@ function opShares(input, c) {
   return { path: path, count: rows.length, shares: rows };
 }
 
+// --- share links ----------------------------------------------------------
+
+// A link is a capability: whoever holds the URL can fetch the file, with no
+// account anywhere. That is the point -- an association sends a document to a
+// notary, not an invitation to create a login.
+//
+// The token is never stored. Its SHA-256 is the record id, so resolving a link
+// is one indexed lookup and a leaked database yields no working URLs.
+
+function linkIdFor(token) {
+  return bkn.crypto.hash(token).slice(0, 32);
+}
+
+function opLinkCreate(input, c) {
+  const drive = parseDrive(input.drive, c);
+  requireAccess(drive, c, "write");
+  const path = normalizePath(input.path);
+  const entry = entryAt(drive, parentOf(path), baseOf(path));
+  if (!entry || entry.state === BINNED) fail(path + " does not exist");
+  if (entry.kind !== "file") fail("only files can be shared by link", "path");
+
+  const token = bkn.crypto.randomHex(24); // 192 bits; the URL is the secret
+  const doc = {
+    drive: drive.key, entry: entry.id, path: path, name: entry.name,
+    created_by: c.sub, created_at: bkn.now(), downloads: 0, revoked: ""
+  };
+
+  if (input.password) {
+    const pw = String(input.password);
+    if (pw.length < 6) fail("a share password needs at least 6 characters", "password");
+    // Salted HMAC, not a slow KDF: bkn has no bcrypt/scrypt, so the real
+    // defence against guessing is the rate limit on the public hook. Say so
+    // rather than implying this is password storage for an account.
+    doc.pw_salt = bkn.crypto.randomHex(16);
+    doc.pw_hash = bkn.crypto.hmac(doc.pw_salt, pw);
+  }
+
+  const days = Number(input.expires_days);
+  if (days > 0) {
+    doc.expires_at = new Date(Date.now() + days * 86400000).toISOString().slice(0, 19) + "Z";
+  }
+
+  bkn.store.put(LINKS, doc, linkIdFor(token));
+  return {
+    // The token is returned exactly once. It cannot be recovered later,
+    // because it was never written down.
+    token: token,
+    path: path,
+    name: entry.name,
+    password_protected: !!doc.pw_hash,
+    expires_at: doc.expires_at || ""
+  };
+}
+
+function opLinks(input, c) {
+  const drive = parseDrive(input.drive, c);
+  requireAccess(drive, c, "read");
+  const rows = bkn.store.list(LINKS, { where: { drive: drive.key }, limit: 200 });
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (input.path && r.path !== normalizePath(input.path)) continue;
+    out.push({
+      id: r.id, path: r.path, name: r.name,
+      created_at: r.created_at, expires_at: r.expires_at || "",
+      password_protected: !!r.pw_hash, downloads: Number(r.downloads) || 0,
+      revoked: r.revoked || ""
+    });
+  }
+  return { drive: drive.key, count: out.length, links: out };
+}
+
+function opLinkRevoke(input, c) {
+  const drive = parseDrive(input.drive, c);
+  requireAccess(drive, c, "write");
+  const id = String(input.id || "");
+  if (!id) fail("id is required; take it from the links listing", "id");
+  const link = bkn.store.get(LINKS, id);
+  if (!link || link.drive !== drive.key) fail("no such link in " + drive.key, "id");
+  // Deleted outright rather than flagged: a revoked link should stop existing,
+  // and keeping the row would only preserve a record of something nobody can
+  // use.
+  bkn.store.delete(LINKS, id);
+  return { revoked: id, path: link.path };
+}
+
 // --- group management -----------------------------------------------------
 
 function opGroupCreate(input, c) {
@@ -759,6 +846,7 @@ const OPS = {
   bin: opBin, restore: opRestore, purge: opPurge, "empty-bin": opEmptyBin,
   download: opDownload, quota: opQuota,
   share: opShare, unshare: opUnshare, shares: opShares,
+  "link-create": opLinkCreate, links: opLinks, "link-revoke": opLinkRevoke,
   "group-create": opGroupCreate, "group-add": opGroupAdd,
   "group-remove": opGroupRemove, groups: opGroups,
   "policy-set": opPolicySet, "policy-get": opPolicyGet

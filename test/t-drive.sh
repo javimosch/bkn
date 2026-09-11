@@ -206,6 +206,49 @@ chk "the real run purges it"           "1"      "$("$BKN" script run drive-purge
 chk "the bin is empty"                 "0"      "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.count)"
 chk "a second run finds nothing"       "0"      "$("$BKN" script run drive-purge 2>/dev/null | j value.examined)"
 
+echo "-- binning a folder that is not empty"
+op "$ALICE" '{"op":"empty-bin","drive":"user:me"}' >/dev/null
+op "$ALICE" '{"op":"mkdir","drive":"user:me","path":"/","name":"dossier"}' >/dev/null
+op "$ALICE" '{"op":"mkdir","drive":"user:me","path":"/dossier","name":"photos"}' >/dev/null
+upcode "$ALICE" user:me /dossier "note.txt" 'aaaa' >/dev/null
+upcode "$ALICE" user:me /dossier/photos "img.txt" 'bbbbbb' >/dev/null
+TREE_USED=$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)
+
+# Refusing by default, with the size in the refusal: a confirmation that does
+# not know what it is confirming is not a confirmation.
+chkin "a full folder refuses without confirm" "Pass confirm" "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/dossier"}')"
+chkin "and the refusal counts the contents"   "2 files and 1 folder" "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/dossier"}')"
+chk "nothing moved on the refusal"            "2"       "$(op "$ALICE" '{"op":"ls","drive":"user:me","path":"/dossier"}' | j value.count)"
+chk "with confirm the whole tree goes"        "4"       "$(op "$ALICE" '{"op":"rm","drive":"user:me","path":"/dossier","confirm":true}' | j value.items)"
+chkin "the folder is gone from the drive"     "does not exist" "$(op "$ALICE" '{"op":"stat","drive":"user:me","path":"/dossier"}')"
+# One row in the bin, not four: a folder of two hundred files must not bury
+# everything else that was deleted this month.
+chk "the bin shows one row for the folder"    "1"       "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.count)"
+chk "and that row is the folder"              "dossier" "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.name)"
+chk "every byte inside counts as binned"      "10"      "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.binned_bytes)"
+chk "the name is reusable at once"            "true"    "$(op "$ALICE" '{"op":"mkdir","drive":"user:me","path":"/","name":"dossier"}' | j value.created)"
+
+echo "-- restoring a folder brings its contents back"
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/dossier"}' >/dev/null
+TID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.1.id)
+chk "restoring under a new name works"        "4"       "$(op "$ALICE" "{\"op\":\"restore\",\"drive\":\"user:me\",\"id\":\"$TID\",\"to_path\":\"/\",\"to_name\":\"archive\"}" | j value.items)"
+chk "the children came back with it"          "2"       "$(op "$ALICE" '{"op":"ls","drive":"user:me","path":"/archive"}' | j value.count)"
+# The contents must follow the rename, or every child lands in a path that no
+# longer exists and the folder looks empty.
+chk "and they were rebased under the new name" "img.txt" "$(op "$ALICE" '{"op":"ls","drive":"user:me","path":"/archive/photos"}' | j value.entries.0.name)"
+chk "a nested file still downloads"           "200"     "$(curl -s -o /dev/null -w '%{http_code}' -L "$B$(op "$ALICE" '{"op":"download","drive":"user:me","path":"/archive/photos/img.txt"}' | j value.url)")"
+chk "binned bytes went back to zero"          "0"       "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.binned_bytes)"
+chk "usage is unchanged by the round trip"    "$TREE_USED" "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.used_bytes)"
+
+echo "-- purging a folder takes its contents"
+# Clear what earlier steps left in the bin, so the count below is absolute.
+op "$ALICE" '{"op":"empty-bin","drive":"user:me"}' >/dev/null
+op "$ALICE" '{"op":"rm","drive":"user:me","path":"/archive","confirm":true}' >/dev/null
+AID=$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.entries.0.id)
+chk "purge removes the whole tree"            "4"       "$(op "$ALICE" "{\"op\":\"purge\",\"drive\":\"user:me\",\"id\":\"$AID\"}" | j value.items)"
+chk "and no orphans are left behind"          "0"       "$(op "$ALICE" '{"op":"bin","drive":"user:me"}' | j value.count)"
+chk "the bytes came back"                     "0"       "$(op "$ALICE" '{"op":"quota","drive":"user:me"}' | j value.usage.binned_bytes)"
+
 echo "-- concurrent uploads race for the last bytes"
 # The quota is reserved with an atomic $inc before the blob is written, so a
 # check-then-write race cannot let two uploads jointly exceed the limit. Ten at

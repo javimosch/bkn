@@ -30,6 +30,12 @@ const BLOBS = "drive-blobs";
 // How long a binned file waits before the nightly purge takes it.
 const BIN_DAYS = 30;
 
+// The most entries one recursive bin, restore or purge will touch. A script
+// runs under a 5s timeout, so an unbounded walk would fail halfway and leave a
+// half-binned tree. Refusing a too-large folder with a clear message is better
+// than a partial move nobody asked for.
+const MAX_TREE = 500;
+
 // Entry state. bkn store filters are equality matches, so "not deleted" has to
 // be a value rather than the absence of one.
 const LIVE = "live";
@@ -349,6 +355,30 @@ function opStat(input, c) {
   return { entry: entry };
 }
 
+// walkTree collects a folder and everything under it, deepest last, so the
+// caller can act on children before their parents.
+function walkTree(drive, root) {
+  const out = [];
+  let frontier = [root];
+  while (frontier.length > 0) {
+    const next = [];
+    for (let i = 0; i < frontier.length; i++) {
+      const node = frontier[i];
+      out.push(node);
+      if (out.length > MAX_TREE) return null;
+      if (node.kind !== "folder") continue;
+      const here = node.parent_path === "/" ? "/" + node.name : node.parent_path + "/" + node.name;
+      const kids = bkn.store.list(ENTRIES, {
+        where: { drive: drive.key, parent_path: here, state: LIVE },
+        limit: MAX_TREE
+      });
+      for (let k = 0; k < kids.length; k++) next.push(kids[k]);
+    }
+    frontier = next;
+  }
+  return out;
+}
+
 function opRm(input, c) {
   const drive = parseDrive(input.drive, c);
   requireAccess(drive, c, "write");
@@ -358,35 +388,60 @@ function opRm(input, c) {
   const entry = entryAt(drive, parent, name);
   if (!entry || entry.state === BINNED) fail(path + " does not exist");
 
+  let tree = [entry];
   if (entry.kind === "folder") {
-    const kids = bkn.store.list(ENTRIES, {
-      where: { drive: drive.key, parent_path: path, state: LIVE }, limit: 1
+    tree = walkTree(drive, entry);
+    if (tree === null) {
+      fail(path + " holds more than " + MAX_TREE + " items; empty some of it first");
+    }
+    // Refuse by default and say exactly what would go. A confirmation that
+    // does not know the size is not a confirmation, so the count travels in
+    // the refusal and the caller sends it back as consent.
+    if (tree.length > 1 && !input.confirm) {
+      let bytes = 0, files = 0, folders = 0;
+      for (let i = 1; i < tree.length; i++) {
+        if (tree[i].kind === "folder") folders++;
+        else { files++; bytes += Number(tree[i].size) || 0; }
+      }
+      fail(path + " is not empty: it holds " + files + " file" + (files === 1 ? "" : "s") +
+           (folders ? " and " + folders + " folder" + (folders === 1 ? "" : "s") : "") +
+           " (" + bytes + " bytes). Pass confirm to move all of it to the bin.",
+           "confirm");
+    }
+  }
+
+  // Deepest first, so a folder is never binned before the things inside it --
+  // an interrupted run then leaves children binned under a live parent, which
+  // reads correctly, rather than orphans under a vanished one.
+  let binnedBytes = 0;
+  const stamp = bkn.now();
+  for (let i = tree.length - 1; i >= 0; i--) {
+    const node = tree[i];
+    releasePath(node.path_key);
+    bkn.store.patch(ENTRIES, node.id, {
+      state: BINNED, deleted: stamp, deleted_from: node.parent_path,
+      // Only the folder the caller named is a bin entry in its own right.
+      // Everything under it rides along, so the bin shows one row rather than
+      // two hundred.
+      binned_with: node.id === entry.id ? "" : entry.id,
+      path_key: "", updated_at: stamp
     });
-    if (kids.length > 0) fail(path + " is not empty");
+    if (node.kind === "file") binnedBytes += Number(node.size) || 0;
   }
-
-  // Into the bin, not gone. The path claim IS released, so the name can be
-  // used again immediately -- a bin that blocks the name it holds would make
-  // "delete and re-upload" fail for thirty days.
-  releasePath(entry.path_key);
-  bkn.store.patch(ENTRIES, entry.id, {
-    state: BINNED, deleted: bkn.now(), deleted_from: parent,
-    path_key: "", updated_at: bkn.now()
-  });
-
-  // Quota is NOT released. The bytes are still on the disk, and a bin that
-  // gave the space back would let a drive hold twice its quota for a month.
-  if (entry.kind === "file") {
-    bkn.store.patch(USAGE, drive.key, { binned_bytes: { $inc: Number(entry.size) || 0 } });
+  if (binnedBytes > 0) {
+    bkn.store.patch(USAGE, drive.key, { binned_bytes: { $inc: binnedBytes } });
   }
-  return { binned: path, id: entry.id, purges_after_days: BIN_DAYS };
+  return {
+    binned: path, id: entry.id, items: tree.length,
+    bytes: binnedBytes, purges_after_days: BIN_DAYS
+  };
 }
 
 // --- the bin ---------------------------------------------------------------
 
 function binnedOf(drive, limit) {
   return bkn.store.list(ENTRIES, {
-    where: { drive: drive.key, state: BINNED },
+    where: { drive: drive.key, state: BINNED, binned_with: "" },
     order_by: "deleted", order: "desc",
     limit: limit || 200
   });
@@ -413,6 +468,13 @@ function opBin(input, c) {
 // then the record: a record without its blob is a broken row in a listing,
 // while a blob without its record is invisible and merely wastes space, and of
 // the two the second is the one you can clean up later.
+// binnedUnder returns everything that rode into the bin with this entry.
+function binnedUnder(drive, id) {
+  return bkn.store.list(ENTRIES, {
+    where: { drive: drive.key, state: BINNED, binned_with: id }, limit: MAX_TREE
+  });
+}
+
 function purgeEntry(drive, entry) {
   if (entry.kind === "file") {
     if (entry.blob) {
@@ -434,16 +496,26 @@ function opPurge(input, c) {
   const entry = bkn.store.get(ENTRIES, id);
   if (!entry || entry.drive !== drive.key) fail("no such entry in " + drive.key, "id");
   if (entry.state !== BINNED) fail("that entry is not in the bin; remove it first", "id");
+
+  // A folder takes everything that went in with it.
+  const riders = binnedUnder(drive, id);
+  for (let i = 0; i < riders.length; i++) purgeEntry(drive, riders[i]);
   purgeEntry(drive, entry);
-  return { purged: entry.name, id: id };
+  return { purged: entry.name, id: id, items: riders.length + 1 };
 }
 
 function opEmptyBin(input, c) {
   const drive = parseDrive(input.drive, c);
   requireAccess(drive, c, "write");
-  const rows = binnedOf(drive, 500);
-  for (let i = 0; i < rows.length; i++) purgeEntry(drive, rows[i]);
-  return { drive: drive.key, purged: rows.length, more: rows.length === 500 };
+  const rows = binnedOf(drive, MAX_TREE);
+  let items = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const riders = binnedUnder(drive, rows[i].id);
+    for (let k = 0; k < riders.length; k++) { purgeEntry(drive, riders[k]); items++; }
+    purgeEntry(drive, rows[i]);
+    items++;
+  }
+  return { drive: drive.key, purged: rows.length, items: items, more: rows.length === MAX_TREE };
 }
 
 function opRestore(input, c) {
@@ -463,15 +535,53 @@ function opRestore(input, c) {
   if (parent !== "/" && !entryAt(drive, parentOf(parent), baseOf(parent))) {
     fail("the folder " + parent + " no longer exists; restore somewhere else with to_path", "to_path");
   }
+
+  const riders = entry.kind === "folder" ? binnedUnder(drive, id) : [];
+  const oldRoot = joinPath(entry.deleted_from || "/", entry.name);
+  const newRoot = joinPath(parent, name);
+
+  // Claim the root first: if the name is taken, nothing else has moved yet.
   const key = claimPath(drive, parent, name, entry.id);
+
+  let returned = 0;
+  const claimed = [key];
+  for (let i = 0; i < riders.length; i++) {
+    const node = riders[i];
+    // A rider's stored parent_path still points under the OLD root. Renaming
+    // or relocating the folder on restore has to move its contents with it,
+    // or every child would be restored into a path that no longer exists.
+    const rebased = node.parent_path === oldRoot
+      ? newRoot
+      : (node.parent_path.indexOf(oldRoot + "/") === 0
+          ? newRoot + node.parent_path.slice(oldRoot.length)
+          : node.parent_path);
+    const rkey = pathKey(drive, rebased, node.name);
+    const won = bkn.store.putIfAbsent(PATHS, {
+      drive: drive.key, parent: rebased, name: node.name, entry: node.id
+    }, rkey);
+    if (!won) {
+      // Undo: a half-restored folder is worse than a refusal, because nobody
+      // can tell which half came back.
+      for (let k = 0; k < claimed.length; k++) releasePath(claimed[k]);
+      fail("cannot restore: " + joinPath(rebased, node.name) + " already exists");
+    }
+    claimed.push(rkey);
+    bkn.store.patch(ENTRIES, node.id, {
+      state: LIVE, deleted: "", binned_with: "",
+      parent_path: rebased, path_key: rkey, updated_at: bkn.now()
+    });
+    if (node.kind === "file") returned += Number(node.size) || 0;
+  }
+
   bkn.store.patch(ENTRIES, entry.id, {
-    state: LIVE, deleted: "", parent_path: parent, name: name,
+    state: LIVE, deleted: "", binned_with: "", parent_path: parent, name: name,
     path_key: key, updated_at: bkn.now()
   });
-  if (entry.kind === "file") {
-    bkn.store.patch(USAGE, drive.key, { binned_bytes: { $inc: -(Number(entry.size) || 0) } });
+  if (entry.kind === "file") returned += Number(entry.size) || 0;
+  if (returned > 0) {
+    bkn.store.patch(USAGE, drive.key, { binned_bytes: { $inc: -returned } });
   }
-  return { restored: joinPath(parent, name), id: entry.id };
+  return { restored: newRoot, id: entry.id, items: riders.length + 1 };
 }
 
 function opMv(input, c) {

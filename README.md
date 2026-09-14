@@ -755,3 +755,7 @@ against a domain bkn had no hand in — a booking backend, chosen because its
 hard parts (never double-book, with no transactions; reschedule, with no
 primitive for it at all) are ones bkn claims to handle. Its pass/fail criteria
 were committed before any of its code was written.
+
+## Projects using bkn
+
+- **[Crevisto](https://crevisto.com)** — 100+ AI image tools, pay-per-use.

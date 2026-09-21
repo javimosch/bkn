@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="bkn" width="96" height="96">
+
 # bkn
 
 A single-binary backend core: namespaced document collections and typed

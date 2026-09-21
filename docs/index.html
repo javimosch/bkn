@@ -6,12 +6,15 @@
 <title>bkn — a backend you own, small enough to read</title>
 <meta name="description" content="A single-binary backend core: documents, settings, identity, files, an event log, a scheduler and a sandboxed script runtime over embedded SQLite. No server, no runtime, no admin UI.">
 <meta name="keywords" content="bkn, backend, sqlite, single binary, agent-first, cli, go">
+<link rel="icon" type="image/svg+xml" href="logo.svg">
 <style>
 :root{--ink:#24221d;--muted:#716b5f;--paper:#fbf6e9;--card:#fffdf7;--line:#ded4be;--gold:#c88a16;--green:#456b4b;--red:#a64235}
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,sans-serif}
 .wrap{max-width:900px;margin:auto;padding:42px 22px 70px}
-header{border-bottom:2px solid var(--ink);padding-bottom:24px;margin-bottom:28px}
+header{border-bottom:2px solid var(--ink);padding-bottom:24px;margin-bottom:28px;display:flex;gap:26px;align-items:flex-start}
+.mark{flex:0 0 auto;width:104px;height:104px;margin-top:6px}
+.headtext{min-width:0}
 .eyebrow{font-size:12px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;color:var(--gold)}
 h1{font:700 clamp(34px,6vw,60px)/1.03 Georgia,serif;margin:8px 0 12px}
 h2{font:700 27px/1.15 Georgia,serif;margin:38px 0 15px}
@@ -41,6 +44,7 @@ table{border-collapse:collapse;width:100%;font-size:15px;margin:14px 0}
 th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 th{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--green)}
 @media(max-width:540px){.wrap{padding-top:26px}.arch{font-size:12px}
+header{flex-direction:column;gap:14px}.mark{width:76px;height:76px;margin-top:0}
 /* a table will not shrink below its min-content width, and these cells hold
    unbreakable code spans; let it scroll in its own box instead of the page */
 table{display:block;overflow-x:auto}}
@@ -50,6 +54,8 @@ table{display:block;overflow-x:auto}}
 <main class="wrap">
 
 <header>
+  <img class="mark" src="logo.svg" width="104" height="104" alt="">
+  <div class="headtext">
   <div class="eyebrow">Single-binary backend core</div>
   <h1>bkn</h1>
   <p class="lead">A backend you own, small enough to read, that outlives the tool
@@ -60,6 +66,7 @@ table{display:block;overflow-x:auto}}
     <a class="btn" href="https://github.com/javimosch/bkn">Repository</a>
     <a class="btn alt" href="https://github.com/javimosch/bkn/releases">Releases</a>
     <a class="btn alt" href="https://github.com/javimosch/bkn/blob/master/VISION.md">Vision</a>
+  </div>
   </div>
 </header>
 

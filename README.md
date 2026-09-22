@@ -750,14 +750,42 @@ all reachable over HTTP. Three things are honestly not:
 The first is a gap. The other two are scope decisions, and closing either one
 would be a different program.
 
-The claim that the core is the right size is currently supported by one
-fit-check against the codebase bkn was derived from, which is weak evidence by
-construction. [creneau](https://github.com/javimosch/creneau) is a second one
-against a domain bkn had no hand in — a booking backend, chosen because its
-hard parts (never double-book, with no transactions; reschedule, with no
-primitive for it at all) are ones bkn claims to handle. Its pass/fail criteria
-were committed before any of its code was written.
+The claim that the core is the right size is supported by one fit-check
+against the codebase bkn was derived from, which is weak evidence by
+construction, and by a second against a domain bkn had no hand in:
+[creneau](https://github.com/javimosch/creneau), a booking backend chosen
+because its hard parts (never double-book, with no transactions; reschedule,
+with no primitive for it at all) are ones bkn claims to handle. Its pass/fail
+criteria were committed before any of its code was written.
+
+**creneau shipped, and its result is incomplete rather than positive**
+([results](https://github.com/javimosch/creneau/blob/master/docs/results.md)).
+Every criterion that could be evaluated holds: one core change admitted against
+a ceiling of three, 137 lines of compensating script against a ceiling of 150,
+and zero double-bookings under sustained concurrency, asserted in SQL against
+the datastore rather than against the API's own answer. Two could not be
+evaluated. And five of its twelve in-scope features were never built — which
+matters more than the passes, because they are the ones that would have
+exercised `cron`, `files`, `hooks` and the access policies. **The benchmark
+reached `store` and `script` and nothing else, so it is evidence about two
+primitives out of nine.**
+
+Its most useful finding was not predicted by any of its four hypotheses, and it
+is about this repository rather than about creneau: bkn's primitives are
+reachable from the CLI, from the script host and from the Go packages, but the
+**HTTP API exposes a strict subset**, and the Go packages are all `internal/`.
+An out-of-process application therefore cannot call `lock`, `putIfAbsent` or a
+two-bound range query directly — it must push that logic into a script and
+invoke it. That is this repository's own thesis working as written ("most of
+what a backend does is not core, it is a script"), and it is not what the
+predictions assumed. The cost is real and worth stating: creneau's booking
+logic is split across two languages.
 
 ## Projects using bkn
 
 - **[Crevisto](https://crevisto.com)** — 100+ AI image tools, pay-per-use.
+- **[creneau](https://github.com/javimosch/creneau)** — machine booking for
+  fablabs and makerspaces, live at [creneau.intrane.fr](https://creneau.intrane.fr).
+  Self-serve signup, a public board per lab, and never a double booking. Runs on
+  `store` and `script` only; its atomic steps are bkn scripts, for the reason in
+  its [ledger](https://github.com/javimosch/creneau/blob/master/docs/ledger.md).

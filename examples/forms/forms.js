@@ -1,7 +1,7 @@
 // Public form submissions.
 //
-// Replaces forms.service + forms.controller + the FormSubmission model from
-// the Node backend with one script behind a browser-reachable hook.
+// One script behind a browser-reachable hook. The form definition is stored
+// as data, so a new form is a `store put` rather than a deploy.
 //
 // Install:
 //   bkn store put forms/definitions --id contact --data @contact-form.json

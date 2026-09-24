@@ -12,9 +12,10 @@ that is the server, the client, and the migration runner.
 a multi-user JSON API where every row belongs to whoever created it and nobody
 can read anyone else's, with no application code at all.
 
-**Ported from** [superbackend](https://github.com/javimosch/superbackend) — an
-85k-line Node/Express/MongoDB backend with ~40 admin domains, whose features
-bkn reimplements as nine scripts sitting on seven primitives.
+**Seven primitives and a sandboxed script runtime.** Documents, settings,
+identity, files, an event log, a scheduler and signed webhooks — the parts
+every backend ends up rebuilding. Anything domain-shaped is a JavaScript file
+you install, not a feature the core grows.
 
 **If you want a UI, use [PocketBase](https://pocketbase.io).** It is the
 closest thing to this and it is very good: one Go binary, embedded SQLite,
@@ -56,14 +57,15 @@ curl -s localhost:7799/_health
 This is the decision people push back on, so it deserves an argument rather
 than a slogan.
 
-**The UI was 30% of the system it replaced and the least testable part of it.**
-superbackend's admin was 83 EJS templates, ~36,000 lines — comparable to its
+**In the system audited above, the UI was 30% of it and the least testable
+part.** That admin was 83 EJS templates, ~36,000 lines — comparable to its
 entire service layer. None of it was covered by a test, none of it could be
 driven by anything but a person, and every feature had to be built twice: once
 as an endpoint and again as a screen.
 
-**A UI is a client, not an interface.** Every one of the nine ported domains
-turned out to be reachable as CLI verbs over a JSON contract; the admin screens
+**A UI is a client, not an interface.** Every one of the nine domains in
+[`examples/`](examples) turned out to be reachable as CLI verbs over a JSON
+contract; the admin screens
 were a second, unversioned client of that contract. bkn keeps the contract and
 drops the second client. The HTTP API is still there — if you want a dashboard,
 build one against it. bkn just declines to make it the product.
@@ -91,8 +93,11 @@ in the core — not a claim that UIs are bad.
 
 ## Why so few primitives
 
-`bkn` replaces a 85k-line Node backend that had grown ~40 admin domains. An
-audit of every real consumer of that backend found that:
+The primitive list is short because it was cut down to what gets used, not
+guessed at. The evidence is an audit of a real production backend —
+[superbackend](https://github.com/javimosch/superbackend), 85k lines of
+Node/Express/MongoDB grown to ~40 admin domains — where every consumer was
+examined to see what it actually called. That audit found:
 
 - only six store operations were ever used — get, put, patch, delete, find by
   field, list — with **no** aggregations, joins or server-side sorts;
@@ -109,7 +114,7 @@ them.
 Small is not the same as limited. The bar for any application is not "could
 this run on bkn" but "would this be *less code* on bkn" — an application bkn
 cannot serve is a gap to close, not a boundary to defend. What keeps that from
-rebuilding superbackend is a single admission rule, in
+growing an 85k-line core again is a single admission rule, in
 [VISION.md](VISION.md#what-gets-in): admit a primitive that removes a class of
 application code from every embedder; refuse a query feature that only moves
 application code into bkn.
@@ -286,9 +291,9 @@ Platform roles (`user`, `admin`) govern the deployment. Organization roles
 (`owner` > `admin` > `member`) govern a tenant. A platform admin is **not**
 implicitly an owner of anybody's organization.
 
-What `auth` deliberately does **not** hold is billing. In the Node backend,
-`subscriptionStatus`, `currentPlan` and `stripeCustomerId` lived on the user
-record, and the absence of an endpoint to write `stripeCustomerId` is what
+What `auth` deliberately does **not** hold is billing. In the backend audited
+above, `subscriptionStatus`, `currentPlan` and `stripeCustomerId` lived on the
+user record, and the absence of an endpoint to write `stripeCustomerId` is what
 drove a consumer to bypass the API and write MongoDB directly. Billing goes in
 a store collection:
 
@@ -639,10 +644,10 @@ point `BKN_ENCRYPTION_KEY_ID` at it, rotate. Entries sealed by a key that is no
 longer configured are reported rather than skipped, and do not block rotating
 the rest.
 
-## Ported domains
+## Worked examples
 
-Two features that were whole admin domains in the Node backend now run as
-scripts, with no Go code added for either — see [`examples/`](examples/):
+Nine domains that are whole services in most stacks run here as scripts, with
+no Go code added for any of them — see [`examples/`](examples/):
 
 | Domain | Node | bkn |
 |---|---|---|

@@ -1,8 +1,9 @@
 // Stripe webhook handler.
 //
-// Replaces src/controllers/billing.controller.js and the StripeWebhookEvent
-// model from the Node backend (~1,500 lines across services, controllers,
-// routes and models) with one script bound to a public hook.
+// One script bound to a public hook: it verifies the signature over the raw
+// body, stays idempotent across retries, and updates billing. (~1,500 lines
+// across services, controllers, routes and models in the Node system this was
+// measured against.)
 //
 // Install:
 //   bkn kv set stripe.webhook_secret whsec_... --type encrypted

@@ -1,7 +1,9 @@
 // Public JSON configuration documents.
 //
-// Replaces jsonConfigs.service + its controller and the JsonConfig model from
-// the Node backend (~660 lines, half of which is a hand-rolled cache).
+// A config is a document with a slug, an optional alias and a cache TTL. The
+// stored content hash is the ETag, so caching is HTTP's job rather than a
+// cache you maintain. (~660 lines in the Node system this was measured
+// against, half of it hand-rolled caching.)
 //
 //   GET /v1/hooks/configs?slug=pricing-table
 //   GET /v1/hooks/configs?alias=pricing        (a stable name for a rotating slug)
@@ -38,9 +40,9 @@ function main(d) {
     return { status: 404, body: { error: "no such config" } };
   }
 
-  // The stored hash is the ETag. The Node version kept an in-process TTL cache
-  // per slug; HTTP already has caching, and its cache is shared by every
-  // client rather than living in one server's memory.
+  // The stored hash is the ETag. An in-process TTL cache per slug would be the
+  // obvious move and the wrong one: HTTP already has caching, and its cache is
+  // shared by every client rather than living in one server's memory.
   const etag = '"' + doc.hash + '"';
   const maxAge = Math.max(0, Number(doc.cache_ttl_seconds) || 0);
   const headers = {

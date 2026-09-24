@@ -1,7 +1,8 @@
 // Headless CMS: schema-driven CRUD over user-defined content models.
 //
-// Replaces headlessModels.service, headlessCrud.controller,
-// headlessApiTokenAuth and two Mongoose models (~780 lines).
+// Content models are documents, so adding a field is a store write rather
+// than a migration. (~780 lines across two services, two controllers, token
+// middleware and two models in the Node system this was measured against.)
 //
 //   GET    /v1/hooks/cms?model=articles&status=live&order_by=published_at
 //   GET    /v1/hooks/cms?model=articles&id=<id>
@@ -222,8 +223,8 @@ function coerce(field, raw) {
 function body(d) {
   try {
     const parsed = JSON.parse(d.body || "{}");
-    // The Node version accepted the fields at the top level or nested; keep
-    // both so existing clients do not have to change.
+    // Accept the fields at the top level or nested under data/fields, so a
+    // client that guesses either way works.
     return parsed.data || parsed.fields || parsed;
   } catch (e) {
     return null;

@@ -26,8 +26,9 @@ When this and rule 2 disagree, this wins.
 
 ## The rules that shape the code
 
-1. **Small on purpose.** This replaces an 85k-line Node backend whose feature
-   count grew because the core had no escape hatch. Target for the full core
+1. **Small on purpose.** The failure mode this guards against is measured: an
+   85k-line Node backend whose feature count grew because the core had no
+   escape hatch. Target for the full core
    (store, kv, auth, files, events, cron, script) was ~8k lines; it landed
    near that, and the number is a point of attention rather than a gate. A new feature
    is presumed to belong in userland until proven otherwise — and since

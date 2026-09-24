@@ -22,16 +22,17 @@ sandboxed JS runtime as the extension point instead of compiled hooks. That keep
 the core small enough that one person can read it, and puts the parts that change
 often in a file you can edit without a compiler.
 
-The evidence, not the hope: nine domains of an 85k-line Node/Express/Mongo
-backend moved onto bkn as roughly 1,700 lines of scripts, with almost nothing
-leaking back into Go.
+The evidence, not the hope: nine domains that were whole services in a
+production Node/Express/Mongo backend are roughly 1,700 lines of scripts here,
+with almost nothing leaking back into Go.
 
 ## What gets in
 
 The north-star metric below implies an ambition — a complex system should get
 **smaller** on bkn, not merely become possible — and that ambition has an
-obvious failure mode: it is this project's own origin. superbackend reached 85k
-lines because the core had no escape hatch and every need became a feature.
+obvious failure mode, and there is a measured example of it:
+[superbackend](https://github.com/javimosch/superbackend) reached 85k lines
+because the core had no escape hatch and every need became a feature.
 Absorbing requirements one SQL construct at a time makes bkn SQLite with extra
 steps.
 

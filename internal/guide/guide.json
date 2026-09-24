@@ -373,7 +373,7 @@
     "serve binds 127.0.0.1 by default. Binding elsewhere with --host turns on bearer-token gating for POST /_shutdown; the token is written to ~/.bkn/shutdown.token.",
     "bkn never retries a failed operation for you. Errors carry a 'recoverable' flag and you decide.",
     "Collections are created on first write. A typo in a namespace makes a new empty collection rather than an error - check 'bkn store collections' if a read comes back empty.",
-    "BKN_ENCRYPTION_KEY always stamps keyId 'v1' - the format the Node backend wrote. Two different single keys therefore both claim v1, and 'kv rekey' cannot tell them apart. Use BKN_ENCRYPTION_KEYS with distinct ids as soon as you have more than one key.",
+    "BKN_ENCRYPTION_KEY always stamps keyId 'v1' - the format written before key ids existed. Two different single keys therefore both claim v1, and 'kv rekey' cannot tell them apart. Use BKN_ENCRYPTION_KEYS with distinct ids as soon as you have more than one key.",
     "Ids are ULIDs and sort by creation time, including within one millisecond. Ordering by id is stable; ordering by a document field is not - store list orders by updated_at, then id.",
     "A script must define main(input). A bare top-level expression is not the result and is never called.",
     "There is no event loop in the script runtime: no promises, no async/await, no setTimeout. bkn.http.fetch blocks and returns its response directly.",

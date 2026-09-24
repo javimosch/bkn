@@ -1,7 +1,8 @@
 // Translation bundles.
 //
-// Replaces i18n.service + i18nInferredKeys.service + their controllers and the
-// I18nEntry / I18nLocale models from the Node backend.
+// Locales and entries are documents. A key missing in the requested locale
+// falls back to the default one, and a key that resolves nowhere is queued
+// for translation rather than silently rendered as itself.
 //
 //   GET /v1/hooks/i18n                       -> bundle for the best locale
 //   GET /v1/hooks/i18n?locale=fr             -> bundle for fr, filled from the default

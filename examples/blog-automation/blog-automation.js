@@ -1,9 +1,10 @@
 // Blog automation: pick a topic, research it, draft a post, illustrate it,
 // publish it.
 //
-// Replaces blogAutomationRun/Config/Publishing plus the llm services from the
-// Node backend (~2,500 lines across services, controllers, routes and three
-// Mongoose models) with one script driven by cron.
+// One script driven by cron: it picks a weighted topic, asks a model for an
+// angle, researches it, drafts, illustrates and publishes. (~2,500 lines
+// across services, controllers, routes and three Mongoose models in the Node
+// system this was measured against.)
 //
 // Install:
 //   bkn kv set blog.llm_key sk-... --type encrypted

@@ -1,7 +1,8 @@
 // Password-protected public exports of form submissions, as CSV or JSON.
 //
-// Replaces waitingListPublicExports.service + waitingListJson.service from the
-// Node backend (~900 lines plus their controllers and routes).
+// The export config is a document: which form, which fields, which format,
+// and the kv key holding the shared password. (~900 lines across two services
+// plus controllers and routes in the Node system this was measured against.)
 //
 // Install:
 //   bkn kv set exports.waitlist_password "a-long-shared-secret" --type encrypted

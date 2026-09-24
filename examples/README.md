@@ -1,20 +1,30 @@
-# Examples — domains ported from the Node backend
+# Examples — nine things every backend ends up needing
 
-These are the proof that the core is the right size: two features that were
-whole admin domains in the 85k-line Node backend, running as scripts with no
-Go code added for either.
+Forms, exports, i18n, redirects, feature flags, JSON configs, a headless CMS,
+Stripe webhooks and a scheduled content pipeline. Each is a working script you
+can install today, and together they are the argument for the core being this
+small: **not one of them needed a line of Go added.**
 
-| Domain | Node | bkn |
+Each is a handler over documents plus a URL — which is why they belong in
+userland rather than in the core. Read one to see the shape, then write your
+own.
+
+For scale, the third column is what the same domain cost in the
+Node/Express/MongoDB system these were first written against
+([superbackend](https://github.com/javimosch/superbackend), 85k lines). It is
+one data point, not a law — but it is a measured one.
+
+| Domain | bkn | For comparison, in Node |
 |---|---|---|
-| Blog automation | ~2,500 lines across services, controllers, routes and 3 Mongoose models | [`blog-automation.js`](blog-automation/blog-automation.js), 234 lines |
-| Stripe webhook | ~1,500 lines across services, controllers, routes and 2 models | [`stripe-webhook.js`](stripe-webhook/stripe-webhook.js), 159 lines |
-| Forms | forms.service + controller + FormSubmission model | [`forms.js`](forms/forms.js), 154 lines |
-| Waiting-list exports | ~900 lines across two services plus controllers and routes | [`waitlist-export.js`](forms/waitlist-export.js), 120 lines |
-| i18n | i18n.service + i18nInferredKeys.service + 2 controllers + 2 models | [`i18n.js`](i18n/i18n.js) 158 + [`i18n-import.js`](i18n/i18n-import.js) 82 lines |
-| Page redirects | pageRedirects.service + admin routes + model | [`redirects.js`](redirects/redirects.js), 110 lines |
-| Feature flags | featureFlags.service + controller | [`feature-flags.js`](flags/feature-flags.js), 138 lines |
-| JSON configs | jsonConfigs.service + controller + model | [`configs.js`](configs/configs.js) 67 + [`config-save.js`](configs/config-save.js) 77 lines |
-| Headless CMS | headlessModels.service + 2 controllers + token middleware + 2 models, ~780 lines | [`headless.js`](headless/headless.js) 311 + [`headless-model.js`](headless/headless-model.js) 111 lines |
+| Blog automation | [`blog-automation.js`](blog-automation/blog-automation.js), 234 lines | ~2,500 lines across services, controllers, routes and 3 Mongoose models |
+| Stripe webhook | [`stripe-webhook.js`](stripe-webhook/stripe-webhook.js), 159 lines | ~1,500 lines across services, controllers, routes and 2 models |
+| Forms | [`forms.js`](forms/forms.js), 154 lines | forms.service + controller + FormSubmission model |
+| Waiting-list exports | [`waitlist-export.js`](forms/waitlist-export.js), 120 lines | ~900 lines across two services plus controllers and routes |
+| i18n | [`i18n.js`](i18n/i18n.js) 158 + [`i18n-import.js`](i18n/i18n-import.js) 82 lines | i18n.service + i18nInferredKeys.service + 2 controllers + 2 models |
+| Page redirects | [`redirects.js`](redirects/redirects.js), 110 lines | pageRedirects.service + admin routes + model |
+| Feature flags | [`feature-flags.js`](flags/feature-flags.js), 138 lines | featureFlags.service + controller |
+| JSON configs | [`configs.js`](configs/configs.js) 67 + [`config-save.js`](configs/config-save.js) 77 lines | jsonConfigs.service + controller + model |
+| Headless CMS | [`headless.js`](headless/headless.js) 322 + [`headless-model.js`](headless/headless-model.js) 111 lines | headlessModels.service + 2 controllers + token middleware + 2 models, ~780 lines |
 
 ## blog-automation
 
@@ -36,7 +46,7 @@ Uses `store` (config, posts, run records), `files` (cover images), `events`
 (audit and the runs-per-day limit), `lock` (manual and scheduled runs cannot
 overlap), `http.fetch` (the model API) and `cron`.
 
-Worth noting in the port:
+Worth knowing:
 
 - The image model is asked for a **data URL** rather than a hosted link, so the
   bytes arrive already base64-encoded and go straight to `bkn.files.put`.
@@ -57,7 +67,7 @@ bkn hooks create stripe --script stripe-webhook
 # point Stripe at https://your-host/v1/hooks/stripe
 ```
 
-Worth noting in the port:
+Worth knowing:
 
 - The signature covers `"<timestamp>.<raw body>"`, so the body must arrive
   byte-for-byte — which is why hook deliveries are never parsed before the
@@ -84,7 +94,7 @@ bkn script run i18n-import --input '{"locale":"fr","entries":{"nav":{"home":"Acc
 bkn hooks create i18n --script i18n --allow-origin https://your-site.example --rate-limit 300
 ```
 
-Worth noting in the port:
+Worth knowing:
 
 - `Accept-Language` is negotiated with its **q-weights**, so
   `de;q=1.0,fr;q=0.5` picks French when German is not available, and `fr-CA`
@@ -114,7 +124,7 @@ curl -sI "https://host/v1/hooks/redirects?path=/old-page"    # 301, Location: /n
 curl -s  "https://host/v1/hooks/redirects?path=/old-page&as=json"
 ```
 
-Worth noting in the port:
+Worth knowing:
 
 - The rule id is the **hash of the normalised path**, so the common case is one
   indexed lookup rather than a scan over every rule.
@@ -136,7 +146,7 @@ bkn kv set flag.new-checkout --type json \
 bkn hooks create flags --script feature-flags --rate-limit 300
 ```
 
-Worth noting in the port:
+Worth knowing:
 
 - Precedence is deny → allow → on → rollout. **Deny wins over allow**: a kill
   switch an allow-list can override is not a kill switch.
@@ -163,7 +173,7 @@ bkn hooks create configs --script configs --rate-limit 300
 curl "https://host/v1/hooks/configs?alias=pricing&raw=1"
 ```
 
-Worth noting in the port:
+Worth knowing:
 
 - Roughly half the Node service was a hand-rolled per-slug TTL cache. That is
   gone: the stored content hash is the **ETag** and the config's own
@@ -189,7 +199,7 @@ curl -H "X-Api-Token: hl_..." \
   "https://host/v1/hooks/cms?model=articles&status=live&order_by=published_at&populate=author"
 ```
 
-Worth noting in the port:
+Worth knowing:
 
 - **Auto-migration disappears.** Roughly 90 lines of the Node service kept a
   Mongoose schema in step with a changing model definition. The store is
@@ -253,7 +263,7 @@ bkn hooks create forms --script forms \
 `GET /v1/hooks/forms?form=waitlist` returns the field list so a page can render
 itself; `POST` validates and stores a submission.
 
-Worth noting in the port:
+Worth knowing:
 
 - A **honeypot** field answers `200` and stores nothing, so a bot believes it
   succeeded and does not adapt.
@@ -275,7 +285,7 @@ bkn hooks create exports --script waitlist-export --rate-limit 30
 curl "https://host/v1/hooks/exports?name=waitlist&password=..." -o waitlist.csv
 ```
 
-Worth noting in the port:
+Worth knowing:
 
 - The shared secret lives in an **encrypted kv entry**, not as a hash on the
   config. It is a password to compare, not a user credential to verify, and

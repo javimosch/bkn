@@ -1,8 +1,7 @@
 // Feature flag evaluation.
 //
-// Replaces featureFlags.service + its controller from the Node backend. The
-// flags themselves need no storage code at all: they are kv entries, so the
-// admin interface is `bkn kv set`.
+// The flags need no storage code at all: they are kv entries, so the admin
+// interface is `bkn kv set` and this script only has to evaluate them.
 //
 //   bkn kv set flag.new-checkout --type json --data ... --public
 //

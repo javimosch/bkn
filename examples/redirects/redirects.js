@@ -1,8 +1,5 @@
 // Page redirects.
 //
-// Replaces pageRedirects.service + adminPageRedirects.routes + the
-// PageRedirect model from the Node backend.
-//
 // bkn does not serve pages, so this resolves a path and answers with a real
 // 301/302 that an edge proxy can follow, or with JSON for a caller that wants
 // to decide for itself:

@@ -92,9 +92,10 @@ verifies and smoke-tests the download before an atomic swap that keeps a
 <code>.bak</code>.</p>
 
 <h2>Seven primitives</h2>
-<p class="lead">It replaces an 85k-line Node/Express/MongoDB backend whose nine
-ported domains became roughly 1,700 lines of scripts, with almost nothing
-leaking back into Go.</p>
+<p class="lead">Everything a backend keeps rebuilding, and nothing that belongs
+to your domain. The nine worked examples &mdash; forms, i18n, redirects, flags,
+Stripe webhooks, a CMS &mdash; are roughly 1,700 lines of JavaScript between
+them, and not one needed a line of Go added to the core.</p>
 
 <div class="grid">
   <section class="card">
@@ -118,7 +119,8 @@ leaking back into Go.</p>
     <div class="meta">users · orgs · memberships · tokens</div>
     <p class="why">Short-lived JWTs, single-use rotating refresh tokens, platform
     and organization roles. What it deliberately does <em>not</em> hold is
-    billing — that is what made the old backend unchangeable.</p>
+    billing &mdash; coupling identity to a payment provider is what makes an auth
+    layer impossible to change later.</p>
   </section>
   <section class="card">
     <div class="tag">files</div>
@@ -206,8 +208,8 @@ admits is not a rule.</p>
 <p>bkn should make a complex system <em>smaller</em>, not merely possible. The
 bar is not “could this app run on bkn” but “would this app be <em>less code</em>
 on bkn”. An application bkn cannot serve is a gap to close, not a boundary to
-defend — and the failure mode that rule guards against is this project’s own
-origin, a core that grew to 85k lines because every need became a feature.</p>
+defend — and the failure mode that rule guards against is well documented:
+a core that grows to 85k lines because every need became a feature.</p>
 <p>Fit-checked against a 131k-line control plane, three primitives took it from
 33 statements beyond the store’s surface to <strong>11</strong> — and all 11
 were refused rather than absorbed. The core grew by three primitives and no

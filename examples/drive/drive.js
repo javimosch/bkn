@@ -1,8 +1,8 @@
 // Shared drive: user, group and org drives over bkn's store and file storage.
 //
-// Replaces superbackend's fileManager module (FileEntry + Asset models,
-// fileManager.service, fileManagerStoragePolicy.service and their
-// controllers) with one script plus a companion upload hook.
+// One script plus a companion upload hook. Every operation is authorised
+// against bkn.caller, so the same script serves an individual's drive, a
+// group's and an org's without three code paths.
 //
 //   bkn script run drive --input '{"op":"ls","drive":"user:me","path":"/"}'
 //
@@ -42,8 +42,8 @@ const MAX_TREE = 500;
 const LIVE = "live";
 const BINNED = "binned";
 
-// Defaults matching superbackend's, so a migrated deployment behaves the same
-// until a policy says otherwise.
+// Conservative defaults, so a deployment behaves predictably until a policy
+// says otherwise.
 const DEFAULT_MAX_UPLOAD = 1073741824; // 1 GiB
 const DEFAULT_MAX_STORAGE = 104857600; // 100 MiB
 
@@ -192,8 +192,8 @@ function positive(v) {
   return Math.floor(n);
 }
 
-// Effective limits cascade most-specific first, exactly as superbackend's
-// storage policy did: user beats group beats org beats global beats default.
+// Effective limits cascade most-specific first: user beats group beats org
+// beats global beats default.
 // The source is reported so an operator can see WHICH rule bound them, which
 // is the question actually asked when an upload is refused.
 function effectiveLimits(drive, c) {

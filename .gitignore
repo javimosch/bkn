@@ -4,3 +4,4 @@ bin/
 *.db-shm
 test/admin.tok
 test/cmstok.txt
+.playwright-cli/

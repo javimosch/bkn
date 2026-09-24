@@ -789,3 +789,21 @@ logic is split across two languages.
   Self-serve signup, a public board per lab, and never a double booking. Runs on
   `store` and `script` only; its atomic steps are bkn scripts, for the reason in
   its [ledger](https://github.com/javimosch/creneau/blob/master/docs/ledger.md).
+
+## A second implementation
+
+**[machin-bkn](https://github.com/javimosch/machin-bkn)** is a clean-room
+reimplementation in [machin](https://github.com/javimosch/machin) (MFL), built
+from this repo's **published contract alone** — `contract/`, `test/`,
+`examples/` and the live HTTP surface, never the Go.
+
+It is not an alternative to run. It is a check on whether the contract is
+complete: anything it cannot reproduce is something that was only ever written
+down in Go. It currently passes **191/191** of the assertions in
+[`test/`](test).
+
+That check has earned its keep. Holding a second implementation to the same
+suite is what surfaced that the suites are unrunnable without the fixtures the
+live instance was seeded with by hand — a fresh instance scored 1/12 on
+`t-files` for want of two namespaces, which says more about the harness than
+about any implementation.

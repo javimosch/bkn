@@ -8,6 +8,10 @@ settings over embedded SQLite, driven from the CLI.
 No database server, no runtime, no admin UI, no container. One static binary
 that is the server, the client, and the migration runner.
 
+**New here?** [**Start here — 60 seconds**](https://javimosch.github.io/bkn/start/):
+a multi-user JSON API where every row belongs to whoever created it and nobody
+can read anyone else's, with no application code at all.
+
 **Ported from** [superbackend](https://github.com/javimosch/superbackend) — an
 85k-line Node/Express/MongoDB backend with ~40 admin domains, whose features
 bkn reimplements as nine scripts sitting on seven primitives.

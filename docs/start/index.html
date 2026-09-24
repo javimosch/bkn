@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bkn in 60 seconds — a multi-user API with no code</title>
+<meta name="description" content="Copy one binary, declare who owns what, and you have a JSON API where every user sees only their own rows. No schema, no migration, no middleware, no application code.">
+<link rel="icon" type="image/svg+xml" href="../logo.svg">
+<style>
+:root{--ink:#24221d;--muted:#716b5f;--paper:#fbf6e9;--card:#fffdf7;--line:#ded4be;--gold:#c88a16;--green:#456b4b;--red:#a64235}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,sans-serif}
+.wrap{max-width:820px;margin:auto;padding:42px 22px 70px}
+header{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:26px}
+.eyebrow{font-size:12px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;color:var(--gold)}
+h1{font:700 clamp(30px,5.5vw,50px)/1.05 Georgia,serif;margin:8px 0 12px}
+h2{font:700 25px/1.15 Georgia,serif;margin:40px 0 13px}
+.lead{max-width:660px;color:var(--muted);font-size:18px;margin:0}
+.arch{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;background:#26251f;color:#f7efd9;border-radius:9px;padding:18px;overflow-x:auto;font-size:13.5px;line-height:1.55}
+.arch b{color:var(--gold);font-weight:600}
+.arch i{color:#9a9481;font-style:normal}
+.arch u{color:#8fc39a;text-decoration:none}
+.out{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;background:var(--card);border:1px solid var(--line);border-left:5px solid var(--green);border-radius:8px;padding:15px 17px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+.beat{padding:15px 18px;border-left:5px solid var(--gold);background:#f5ead0;margin:22px 0}
+.beat strong{display:block;margin-bottom:4px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;background:#f2e9d4;padding:1px 5px;border-radius:4px}
+a{color:var(--ink)}
+ul{padding-left:22px}li{margin:7px 0}
+.foot{margin-top:44px;border-top:1px solid var(--line);padding-top:15px;color:var(--muted);font-size:13px}
+.foot a{color:var(--muted)}
+.next{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:8px}
+.next a{display:block;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:15px 17px;text-decoration:none}
+.next b{display:block;margin-bottom:3px}
+.next span{color:var(--muted);font-size:14px}
+@media(max-width:540px){.arch,.out{font-size:11.5px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">60 seconds</div>
+  <h1>A multi-user API,<br>and you write no code</h1>
+  <p class="lead">Every row belongs to whoever created it. Nobody can read anyone
+  else's. There is no schema to write, no migration to run, no middleware to
+  remember — and nothing to deploy but one file.</p>
+</header>
+
+<h2>The whole thing</h2>
+
+<div class="arch"><i># 1. one binary, no runtime, no container</i>
+curl -L https://github.com/javimosch/bkn/releases/latest/download/bkn -o bkn
+chmod +x bkn
+
+<i># keeps this demo in ./demo.db instead of your real store at ~/.bkn</i>
+export BKN_DATA=./demo.db
+export BKN_ADMIN_TOKEN=dev-token
+
+<i># 2. the only line that matters: who owns a row, and who may touch it</i>
+./bkn store create notes/entries \
+    <b>--owner-field user_id</b> \
+    <b>--access read=owner --access create=owner</b> \
+    <b>--access update=owner --access delete=owner</b>
+
+<i># 3. two people</i>
+echo -n 'ada-password' | ./bkn auth user create ada@example.io --password-stdin
+echo -n 'bob-password' | ./bkn auth user create bob@example.io --password-stdin
+
+./bkn serve &</div>
+
+<p>That is the setup. Now log in as each of them and watch what happens.</p>
+
+<div class="arch">login() { curl -s localhost:7799/v1/auth/login -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$1\",\"password\":\"$2\"}" | jq -r .tokens.access_token; }
+
+ADA=$(login ada@example.io ada-password)
+BOB=$(login bob@example.io bob-password)
+
+<i># ada writes a note. look closely: there is no user_id in this request</i>
+curl -s localhost:7799/v1/store/notes/entries -H "Authorization: Bearer $ADA" \
+     -H 'Content-Type: application/json' -d '{"text":"ada note"}' | jq -c .record</div>
+
+<div class="out">{"id":"01M395D4R200HTP291HG48XNDT","text":"ada note",
+ <b>"user_id":"01M395D1FX3RMEG0MHTB7K8QM7"</b>}</div>
+
+<p>The server stamped it. Ada never sent a <code>user_id</code> and could not have
+got it wrong.</p>
+
+<div class="arch"><i># each of them reads the same URL</i>
+N=localhost:7799/v1/store/notes/entries
+curl -s $N -H "Authorization: Bearer $ADA" | jq -c '[.records[].text]'
+curl -s $N -H "Authorization: Bearer $BOB" | jq -c '[.records[].text]'
+curl -s -o /dev/null -w '%{http_code}\n' $N          <i># nobody</i></div>
+
+<div class="out">ada:    ["ada note"]
+bob:    ["bob note"]
+nobody: 401</div>
+
+<h2>Now try to cheat</h2>
+
+<p>Ada knows Bob's user id. She writes a row and claims it is his.</p>
+
+<div class="arch">curl -s localhost:7799/v1/store/notes/entries -H "Authorization: Bearer $ADA" \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"forged","user_id":"<b>01M395D1K538BXDMB5NW98ZPAE</b>"}' \
+     | jq -c '.record | {text, user_id}'   <i># that is bob's id</i></div>
+
+<div class="out">{"text":"forged","user_id":"<b>01M395D1FX3RMEG0MHTB7K8QM7</b>"}   <i>&larr; ada's id, not bob's</i>
+
+bob still sees: ["bob note"]</div>
+
+<div class="beat">
+  <strong>It did not return an error. It returned the truth.</strong>
+  The owner is not a field the caller gets to set — it is stamped from the token,
+  so a request that lies about it is simply corrected. There is no code path where
+  forgetting a check lets it through, because there is no check: the owner is part
+  of the query, not a condition tested beside it.
+</div>
+
+<h2>What you did not write</h2>
+
+<ul>
+  <li>A users table, password hashing, and token issuing and verification.</li>
+  <li>An auth middleware, and the discipline of putting it on every route.</li>
+  <li><strong>The <code>WHERE user_id = ?</code> you must never forget.</strong> Every
+  leak of this shape is one query somebody wrote without it.</li>
+  <li>A migration, and the second one when the shape changed.</li>
+  <li>A container, a database server, a connection string, a deploy.</li>
+</ul>
+
+<p>The interesting one is the third. Owner scoping being <em>part of</em> the read
+rather than a guard in front of it is the difference between "we remembered
+everywhere" and "it cannot be forgotten".</p>
+
+<h2>Where this goes next</h2>
+
+<p>Swap <code>owner</code> for <code>org</code> and the same two lines give you
+tenant isolation instead of per-user. Swap it for <code>public</code> and you have a
+read-only API for a front end. When you need real behaviour rather than storage —
+validating a form, verifying a webhook signature, exporting a CSV — that is a
+JavaScript file you install with <code>bkn script create</code>, not a service you
+stand up.</p>
+
+<div class="next">
+  <a href="../"><b>What bkn is</b><span>The seven primitives and the trade it makes</span></a>
+  <a href="https://github.com/javimosch/bkn/tree/master/examples"><b>Nine worked domains</b><span>Forms, i18n, redirects, flags, Stripe, a CMS</span></a>
+  <a href="https://github.com/javimosch/bkn"><b>Repository</b><span>Source, releases and the full README</span></a>
+</div>
+
+<div class="foot">
+  Needs <code>curl</code> and <code>jq</code>. Linux x86_64, statically linked.
+  Delete <code>demo.db</code> and the binary and nothing remains. ·
+  <a href="../">bkn</a> ·
+  <a href="https://github.com/javimosch/bkn">GitHub</a>
+</div>
+
+</div>
+</body>
+</html>

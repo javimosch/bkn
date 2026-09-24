@@ -792,7 +792,7 @@ logic is split across two languages.
 
 ## A second implementation
 
-**[machin-bkn](https://github.com/javimosch/machin-bkn)** is a clean-room
+**[machin-bkn](https://javimosch.github.io/machin-bkn/)** is a clean-room
 reimplementation in [machin](https://github.com/javimosch/machin) (MFL), built
 from this repo's **published contract alone** — `contract/`, `test/`,
 `examples/` and the live HTTP surface, never the Go.

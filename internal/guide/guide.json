@@ -362,6 +362,15 @@
         "bkn serve                       # GET /version and /dl/bkn now describe it",
         "BKN_SERVER=https://your-host bkn update   # on the other machine"
       ]
+    },
+    {
+      "goal": "Backend a private portal (logins, roles, private files, contact form) with scripts only",
+      "do": [
+        "# see examples/portal/README.md - the full composed recipe:",
+        "bkn script create login-password --file examples/portal/login-password.js",
+        "bkn hooks create login-password --script login-password --rate-limit 60 --allow-origin https://your-frontend",
+        "bkn files ns create portal-priv --signing-key auto   # session-gated signed URLs via the file-link hook"
+      ]
     }
   ],
   "gotchas": [
@@ -406,6 +415,8 @@
     "A hook URL is PUBLIC and unauthenticated - that is the point, since providers sign requests rather than carrying a bearer token. The bound script is the only thing standing between the internet and your data: verify the signature with bkn.crypto.hmac and compare it with bkn.crypto.equal, never with ===.",
     "A hook script that throws answers 500, so the provider retries. Return {status: 200} explicitly once you have accepted a delivery, even if you decided to ignore it.",
     "The hook body reaches the script byte-for-byte in `body`, plus `body_base64` for payloads that are not valid UTF-8. Signatures cover exact bytes: never re-serialize before hashing.",
+    "`body` is a STRING, not an object - JSON.parse(d.body) before reading fields. Reading d.body.email on the raw string yields undefined and fails silently downstream (as bad_credentials, say), never as a parse error.",
+    "bkn.auth.login(email, password, org) verifies a password inside a script - the opt-in way to compose sign-in with your own policy (whitelists, org checks, audit events). bkn.auth.issue mints without checking; choose deliberately.",
     "bkn.http.fetch returns text by default and a JavaScript string is UTF-8, so binary responses are corrupted. Pass {responseEncoding:'base64'} for anything that is not text.",
     "bkn.store.putIfAbsent returns null when the id already existed, which is the idempotency answer a webhook retry needs. A get-then-put has a race that a retry will eventually find.",
     "A lock is a lease with an expiry, so a crashed holder cannot block the work forever - but a run that outlives its TTL loses the lock while still going. Renew it, or set the TTL above the worst-case run time.",

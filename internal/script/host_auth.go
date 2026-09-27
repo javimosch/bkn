@@ -166,9 +166,21 @@ func (r *Runner) newAuthAPI(throw func(error)) map[string]any {
 		},
 		// login verifies a password and returns the token pair — the opt-in
 		// building block for password sign-in hooks (a script chooses to expose
-		// it; callers get bad_credentials, not a user oracle). Org may be "".
+		// it; hooks stay public, auth stays the script's decision). Auth-domain
+		// failures return null rather than throwing, like verify: the script's
+		// answer to a caller is a status code, not an exception — and an uncaught
+		// throw would surface as a 500, inviting provider retries for what is a
+		// plain 401. Collapsing bad_credentials/user_disabled/not_a_member into
+		// null is also oracle-resistant: a script cannot distinguish "wrong
+		// password" from "no such user" unless it deliberately checks findUser.
+		// Genuine failures (db, crypto) still throw. Org may be "".
 		"login": func(email, password, org string) any {
 			tokens, err := a.Login(email, password, org)
+			if errors.Is(err, auth.ErrBadCredentials) ||
+				errors.Is(err, auth.ErrUserDisabled) ||
+				errors.Is(err, auth.ErrNotAMember) {
+				return nil
+			}
 			if err != nil {
 				throw(err)
 			}

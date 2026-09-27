@@ -595,7 +595,9 @@ there are no promises or `async`/`await`.
 The trust model is worth stating plainly: **scripts are operator code, not
 tenant code.** A script already reads decrypted secrets through `bkn.kv`, and
 `bkn.auth.issue` can mint a session for any user — which is what makes SSO
-callbacks and invite acceptance scriptable. Review a script the way you would
+callbacks and invite acceptance scriptable — and `bkn.auth.login` verifies a
+password, so a hook can compose password sign-in with its own policy
+(whitelists, org checks, audit events). Review a script the way you would
 review core.
 
 ## Conformance

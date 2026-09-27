@@ -393,3 +393,24 @@ func TestScriptSeesItsCaller(t *testing.T) {
 		t.Fatalf("an internal run should report the system caller: %+v", got)
 	}
 }
+
+// login is the opt-in password path: a script exposes it, callers either get
+// tokens or bad_credentials — never a user oracle.
+func TestAuthLogin(t *testing.T) {
+	_, runner, _ := setup(t)
+	res := run(t, runner, `
+		function main() {
+			bkn.auth.createUser("ada@example.io", "correct-horse", {});
+			const ok = bkn.auth.login("ada@example.io", "correct-horse", "");
+			let denied = "";
+			try { bkn.auth.login("ada@example.io", "wrong", ""); } catch (e) { denied = String(e); }
+			return { hasToken: !!ok.access_token, denied: denied };
+		}`, nil)
+	if !res.OK {
+		t.Fatalf("run failed: %s", res.Run.Error)
+	}
+	v := res.Value.(map[string]any)
+	if v["hasToken"] != true || !strings.Contains(v["denied"].(string), "incorrect") {
+		t.Fatalf("login = %v", v)
+	}
+}

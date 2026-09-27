@@ -164,5 +164,15 @@ func (r *Runner) newAuthAPI(throw func(error)) map[string]any {
 			}
 			return tokens
 		},
+		// login verifies a password and returns the token pair — the opt-in
+		// building block for password sign-in hooks (a script chooses to expose
+		// it; callers get bad_credentials, not a user oracle). Org may be "".
+		"login": func(email, password, org string) any {
+			tokens, err := a.Login(email, password, org)
+			if err != nil {
+				throw(err)
+			}
+			return tokens
+		},
 	}
 }

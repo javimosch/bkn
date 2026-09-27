@@ -186,5 +186,34 @@ func (r *Runner) newAuthAPI(throw func(error)) map[string]any {
 			}
 			return tokens
 		},
+		// refresh rotates a refresh token into a new token pair. An expired or
+		// revoked session is an expected answer, so like verify/login it returns
+		// null rather than throwing; genuine failures (db, crypto) still throw.
+		"refresh": func(refresh string) any {
+			tokens, err := a.Refresh(refresh)
+			if errors.Is(err, auth.ErrSessionInvalid) {
+				return nil
+			}
+			if err != nil {
+				throw(err)
+			}
+			return tokens
+		},
+		// revoke kills the session behind a refresh token (server-side logout).
+		"revoke": func(refresh string) any {
+			if err := a.Logout(refresh); err != nil {
+				throw(err)
+			}
+			return true
+		},
+		// revokeAll kills every live session for a user — the building block for
+		// "remove this person's access" admin flows. Returns the count revoked.
+		"revokeAll": func(userIDOrEmail string) any {
+			n, err := a.RevokeAllSessions(userIDOrEmail)
+			if err != nil {
+				throw(err)
+			}
+			return n
+		},
 	}
 }
